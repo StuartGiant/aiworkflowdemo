@@ -1,0 +1,185 @@
+# AI Workflow Demo — local stack
+#
+# Three services pinned to specific image tags:
+#   - PostgreSQL 16   : case DB + append-only custody ledger
+#   - OpenSearch 2.x  : ECS-normalised log store
+#   - MinIO           : S3-compatible evidence vault with Object Lock
+#
+# All credentials are read from ../.env (gitignored). Copy .env.example to .env
+# before bringing the stack up.
+#
+# Usage:
+#   cd docker
+#   docker compose --env-file ../.env up -d
+#   docker compose --env-file ../.env down
+#
+# Production swap-outs are documented in docs/adr/0002-evidence-store.md.
+
+name: ai-workflow-demo
+
+services:
+
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: aiwf-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB required}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?POSTGRES_ADMIN_USER required}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD required}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      # Passed through so that 0001b_set_role_passwords.sh can set application
+      # role passwords without hardcoding them in SQL.
+      POSTGRES_WRITER_PASSWORD: ${POSTGRES_WRITER_PASSWORD:?POSTGRES_WRITER_PASSWORD required}
+      POSTGRES_READER_PASSWORD: ${POSTGRES_READER_PASSWORD:?POSTGRES_READER_PASSWORD required}
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.4
+    container_name: aiwf-opensearch
+    restart: unless-stopped
+    environment:
+      cluster.name: aiwf-demo
+      node.name: aiwf-os-1
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD:?OPENSEARCH_ADMIN_PASSWORD required}
+      # Demo only: TLS disabled to keep setup minimal. Production must enable
+      # the security plugin with TLS and SSO.
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health | grep -E '\"status\":\"(green|yellow)\"' >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  minio:
+    image: minio/minio:latest
+    container_name: aiwf-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD required}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  # One-shot init: creates the evidence-vault bucket with Object Lock enabled,
+  # plus the writer / reader / admin service accounts. Idempotent — safe to
+  # re-run.
+  minio-init:
+    image: minio/mc:latest
+    container_name: aiwf-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?}
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:?EVIDENCE_BUCKET required}
+      EVIDENCE_WRITER_ACCESS_KEY: ${EVIDENCE_WRITER_ACCESS_KEY:?}
+      EVIDENCE_WRITER_SECRET_KEY: ${EVIDENCE_WRITER_SECRET_KEY:?}
+      EVIDENCE_READER_ACCESS_KEY: ${EVIDENCE_READER_ACCESS_KEY:?}
+      EVIDENCE_READER_SECRET_KEY: ${EVIDENCE_READER_SECRET_KEY:?}
+      EVIDENCE_ADMIN_ACCESS_KEY: ${EVIDENCE_ADMIN_ACCESS_KEY:?}
+      EVIDENCE_ADMIN_SECRET_KEY: ${EVIDENCE_ADMIN_SECRET_KEY:?}
+      RETENTION_DAYS: ${EVIDENCE_RETENTION_DAYS:-1}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+
+        # Create the bucket with Object Lock if it does not exist.
+        if ! mc ls "local/$$EVIDENCE_BUCKET" >/dev/null 2>&1; then
+          mc mb --with-lock "local/$$EVIDENCE_BUCKET"
+        fi
+
+        # Governance-mode retention default. Demo uses short retention so
+        # cleanup is easy; production swaps to Compliance mode + long retention.
+        mc retention set --default GOVERNANCE "$${RETENTION_DAYS}d" "local/$$EVIDENCE_BUCKET"
+        mc version enable "local/$$EVIDENCE_BUCKET"
+
+        # Writer: PUT only on the evidence bucket.
+        mc admin user add local "$$EVIDENCE_WRITER_ACCESS_KEY" "$$EVIDENCE_WRITER_SECRET_KEY" || true
+        cat >/tmp/writer.json <<EOF
+        {"Version":"2012-10-17","Statement":[
+          {"Effect":"Allow","Action":["s3:PutObject","s3:PutObjectRetention","s3:GetObject"],
+           "Resource":["arn:aws:s3:::$$EVIDENCE_BUCKET/*"]},
+          {"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketObjectLockConfiguration"],
+           "Resource":["arn:aws:s3:::$$EVIDENCE_BUCKET"]}
+        ]}
+        EOF
+        mc admin policy create local evidence-writer /tmp/writer.json || true
+        mc admin policy attach local evidence-writer --user "$$EVIDENCE_WRITER_ACCESS_KEY" || true
+
+        # Reader: GET only.
+        mc admin user add local "$$EVIDENCE_READER_ACCESS_KEY" "$$EVIDENCE_READER_SECRET_KEY" || true
+        cat >/tmp/reader.json <<EOF
+        {"Version":"2012-10-17","Statement":[
+          {"Effect":"Allow","Action":["s3:GetObject","s3:GetObjectVersion","s3:GetObjectRetention"],
+           "Resource":["arn:aws:s3:::$$EVIDENCE_BUCKET/*"]},
+          {"Effect":"Allow","Action":["s3:ListBucket"],
+           "Resource":["arn:aws:s3:::$$EVIDENCE_BUCKET"]}
+        ]}
+        EOF
+        mc admin policy create local evidence-reader /tmp/reader.json || true
+        mc admin policy attach local evidence-reader --user "$$EVIDENCE_READER_ACCESS_KEY" || true
+
+        # Admin: bypass governance. Used ONLY by the tamper-demo script.
+        mc admin user add local "$$EVIDENCE_ADMIN_ACCESS_KEY" "$$EVIDENCE_ADMIN_SECRET_KEY" || true
+        cat >/tmp/admin.json <<EOF
+        {"Version":"2012-10-17","Statement":[
+          {"Effect":"Allow","Action":["s3:*","s3:BypassGovernanceRetention"],
+           "Resource":["arn:aws:s3:::$$EVIDENCE_BUCKET","arn:aws:s3:::$$EVIDENCE_BUCKET/*"]}
+        ]}
+        EOF
+        mc admin policy create local evidence-admin /tmp/admin.json || true
+        mc admin policy attach local evidence-admin --user "$$EVIDENCE_ADMIN_ACCESS_KEY" || true
+
+        echo "minio-init: bucket=$$EVIDENCE_BUCKET retention=$${RETENTION_DAYS}d GOVERNANCE ready"
+    restart: "no"
+
+volumes:
+  postgres_data:
+  opensearch_data:
+  minio_data:

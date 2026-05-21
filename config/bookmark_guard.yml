@@ -1,0 +1,106 @@
+# bookmark_guard.yml — sensitive URL detection patterns
+#
+# Each pattern has:
+#   name:        unique identifier used in violation records and logs
+#   description: human-readable summary (for reports / analyst context)
+#   pattern:     Python regex (case-insensitive); matched against the full URL
+#
+# Add or adjust patterns to match your environment's sensitive systems.
+# All patterns are tested against the complete URL including scheme, host,
+# path, and query string.
+
+patterns:
+
+  # ── PII data endpoints ───────────────────────────────────────────────────
+  - name: pii_endpoint
+    description: URLs pointing to PII data endpoints or personal-data exports
+    pattern: '/(?:pii|personal[-_]data|user[-_]data|employee[-_]data)(?:/|$|\?)'
+
+  - name: ssn_in_url
+    description: Social Security Number pattern embedded in a URL
+    pattern: '\b\d{3}[-]\d{2}[-]\d{4}\b'
+
+  - name: credit_card_in_url
+    description: Credit card number pattern embedded in a URL
+    pattern: '\b(?:\d{4}[-\s]){3}\d{4}\b'
+
+  # ── Internal HR and payroll ───────────────────────────────────────────────
+  - name: internal_hr
+    description: Internal HR system URLs
+    pattern: 'hr\.(?:internal|corp|company)\.'
+
+  - name: payroll_system
+    description: Internal payroll or compensation system URLs
+    pattern: '(?:payroll|salary|compensation)\.(?:internal|corp)\.'
+
+  # ── Internal financial systems ────────────────────────────────────────────
+  - name: internal_finance
+    description: Internal finance, accounting, or treasury portal URLs
+    pattern: '(?:finance|accounting|treasury)\.(?:internal|corp)\.'
+
+  # ── Confidential / classified document stores ─────────────────────────────
+  - name: classified_docs
+    description: Bookmarks to classified or restricted document repositories
+    pattern: '(?:confidential|classified|sensitive|restricted)\.(?:internal|corp)\.'
+
+  # ── Admin portals with user/personnel access ──────────────────────────────
+  - name: admin_user_portal
+    description: Admin portals showing user, employee, or personnel data
+    pattern: '/(?:admin|superuser|root)/.*(?:users|employees|personnel)'
+
+  # ── Raw data / bulk export URLs ───────────────────────────────────────────
+  - name: bulk_data_export
+    description: URLs that trigger bulk data exports (CSV, XLSX, JSON dumps)
+    pattern: '/export(?:/|$|\?).*\.(?:csv|xlsx|json|parquet)'
+
+  # ── Medical / health records ──────────────────────────────────────────────
+  - name: health_records
+    description: Health or medical record system URLs
+    pattern: '(?:ehr|emr|hipaa|healthrecords?|medicalrecords?)\.(?:internal|corp)\.'
+
+  # ── Streaming / personal entertainment ───────────────────────────────────
+  - name: netflix
+    description: Netflix and all its subdomains (www, help, api, account, etc.)
+    pattern: '\bnetflix\.com(?:[/?:#]|$)'
+
+
+# ── Notification ─────────────────────────────────────────────────────────────
+# sender_email: the address the service account impersonates via DWD to send mail.
+# GOOGLE_SERVICE_ACCOUNT_KEY_PATH must be set in .env (it is a secret).
+# GOOGLE_NOTIFICATION_SENDER_EMAIL env var overrides sender_email if set.
+notification:
+  sender_email: stuart.chen@zeroinsiderai.com
+  message_template: |
+    Hi {display_name},
+
+    This is an automated security notification from the Cybersecurity team.
+
+    We detected {count} bookmark(s) or browser homepage setting(s) on your
+    workstation ({hostname}) that contain URLs with sensitive information.
+    Those items have been automatically removed from your Chrome browser.
+
+    Removed items:
+    {item_list}
+
+    Please do not bookmark or set as your browser homepage any URLs that
+    contain sensitive information such as PII, financial records, or internal
+    restricted systems.
+
+    If you believe this was done in error, or if you have any questions,
+    please contact the Cybersecurity team.
+
+    Thank you for your cooperation.
+
+
+# ── Options ──────────────────────────────────────────────────────────────────
+options:
+  # Only Chrome profiles signed in with this corporate domain are scanned.
+  # Profiles with no signed-in account, or signed in with a personal address
+  # (e.g. @gmail.com), are treated as private and skipped entirely —
+  # no detection, no removal, no notification.
+  corporate_email_domain: zeroinsiderai.com
+
+  # Set to true to abort if Chrome is open (safer — files are not locked on
+  # macOS but Chrome may overwrite changes on shutdown).
+  # Set to false to warn and proceed anyway.
+  stop_if_chrome_running: false

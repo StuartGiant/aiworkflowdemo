@@ -1,0 +1,37 @@
+# ============================================================
+# AI Workflow Demo — Python dependencies
+# ============================================================
+# All pinned to exact versions (== ) for reproducibility.
+# Update pins by running:
+#   pip install --upgrade <pkg> && pip freeze | grep <pkg>
+# then commit the updated requirements.txt.
+#
+# Install into the project venv:
+#   source venv/bin/activate
+#   pip install -r requirements.txt
+# ============================================================
+
+# PostgreSQL adapter (psycopg3 — pure-Python build)
+# Used by: src/evidence/db.py, custody.py, __init__.py, scripts/tamper_demo.py
+psycopg==3.3.4
+
+# Ed25519 signing / verification (libsodium bindings)
+# Used by: src/evidence/signing.py, custody.py
+PyNaCl==1.6.2
+
+# MinIO / S3-compatible object-store client
+# Used by: src/evidence/storage.py, scripts/tamper_demo.py
+minio==7.2.20
+
+# Google API client + auth (Admin SDK, Google Chat)
+# Used by: src/automation/bookmark_guard/notifier.py
+google-api-python-client==2.172.0
+google-auth==2.40.2
+
+# YAML config parsing
+# Used by: src/automation/bookmark_guard/config.py, config/bookmark_guard.yml
+PyYAML==6.0.2
+
+# .env loader for local development
+# Used by: scripts/run_bookmark_guard.py
+python-dotenv==1.1.0
