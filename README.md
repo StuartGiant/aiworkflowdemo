@@ -80,6 +80,48 @@ python scripts/run_bookmark_guard.py --config config/bookmark_guard.yml
 
 ---
 
+## Evidence data model
+
+Each automation run that results in a removal produces a fully linked evidence chain:
+
+```
+cases
+ └── evidence_items  (artefact snapshot + signed manifest)
+      └── evidence_custody  (chain-of-custody events: collected → accessed → …)
+ └── bookmark_violations  (violation rows, each FK'd to an evidence_item)
+audit_log  (append-only record of every record_evidence / verify_evidence call)
+```
+
+**Case auto-creation:** bookmark_guard creates a daily case keyed `BG-<hostname>-<YYYY-MM-DD>` on first violation of the day. Subsequent runs on the same host/day reuse the same case, so all artefacts for a day are grouped under one case record.
+
+**Chain-of-custody events** are hash-chained: each event records `prev_event_hash` and `this_event_hash` (SHA-256), plus an Ed25519 signature. Deletes and updates are blocked at the database trigger level — the chain is append-only and tamper-evident.
+
+**Querying a case end-to-end:**
+```sql
+-- All evidence for a case
+SELECT artefact_id, collected_at_utc, bytes, encode(sha256,'hex'), s3_uri
+FROM evidence_items WHERE case_id = '<case_id>';
+
+-- Custody chain for an artefact
+SELECT event_type, actor, purpose, event_time_utc,
+       encode(prev_event_hash,'hex'), encode(this_event_hash,'hex')
+FROM evidence_custody WHERE artefact_id = '<artefact_id>' ORDER BY event_time_utc;
+
+-- Violations linked to a case
+SELECT detected_at_utc, chrome_email, url, pattern_name, action_taken, evidence_artefact_id
+FROM bookmark_violations
+WHERE evidence_artefact_id IN (
+    SELECT artefact_id FROM evidence_items WHERE case_id = '<case_id>'
+);
+
+-- Audit trail for a case's artefacts
+SELECT event_time_utc, actor, action, outcome, details
+FROM audit_log
+WHERE target IN (SELECT artefact_id::text FROM evidence_items WHERE case_id = '<case_id>');
+```
+
+---
+
 ## Evidence module (`src/evidence/`)
 
 Shared evidence preservation library used by all automations. Provides two public functions:
