@@ -41,6 +41,13 @@ class SensitivePattern:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtensionConfig:
+    extension_path: Path        # path to the unpacked extension directory
+    chrome_profile: str         # Chrome profile dir name, e.g. "Profile 1"
+    launch_wait_seconds: int    # seconds to wait after Chrome opens for onStartup to fire
+
+
+@dataclass(frozen=True, slots=True)
 class NotificationConfig:
     service_account_key_path: Path
     sender_email: str       # Gmail address the service account impersonates via DWD
@@ -55,6 +62,7 @@ class BookmarkGuardConfig:
     corporate_email_domain: str   # e.g. "zeroinsiderai.com" — private profiles skipped
     stop_if_chrome_running: bool
     dry_run: bool
+    extension: ExtensionConfig | None   # if set, use extension-based removal
 
     @classmethod
     def from_file(cls, config_path: Path, *, dry_run: bool = False) -> BookmarkGuardConfig:
@@ -80,6 +88,8 @@ class BookmarkGuardConfig:
 
         postgres = _load_postgres()
 
+        extension = _load_extension(raw.get("extension", {}))
+
         return cls(
             patterns=patterns,
             postgres=postgres,
@@ -87,7 +97,22 @@ class BookmarkGuardConfig:
             corporate_email_domain=str(domain).lower().lstrip("@"),
             stop_if_chrome_running=bool(options.get("stop_if_chrome_running", False)),
             dry_run=dry_run,
+            extension=extension,
         )
+
+
+def _load_extension(raw: dict) -> ExtensionConfig | None:
+    ext_path = str(raw.get("extension_path", "")).strip()
+    if not ext_path:
+        return None
+    resolved = Path(ext_path).expanduser().resolve()
+    if not resolved.exists():
+        raise ConfigError(f"extension.extension_path does not exist: {resolved}")
+    return ExtensionConfig(
+        extension_path=resolved,
+        chrome_profile=str(raw.get("chrome_profile", "Profile 1")),
+        launch_wait_seconds=int(raw.get("launch_wait_seconds", 8)),
+    )
 
 
 def _load_patterns(raw_patterns: list) -> tuple[SensitivePattern, ...]:

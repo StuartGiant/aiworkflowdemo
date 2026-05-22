@@ -14,12 +14,12 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import BookmarkGuardConfig, SensitivePattern
-from .errors import BookmarkWriteError, ChromeRunningError
 from .models import BookmarkMatch, RemovalOutcome, ScanResult
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ class BookmarkResponder:
         modification.  The artefact_id is stored on each RemovalOutcome and
         written to bookmark_violations.evidence_artefact_id.
         """
+        chrome_was_running = _is_chrome_running()
         self._check_chrome(result)
 
         # Group matches by profile so we read/write each file once.
@@ -95,6 +96,22 @@ class BookmarkResponder:
         if not self._config.dry_run:
             self._record_violations(result, outcomes)
 
+        if chrome_was_running and not self._config.dry_run:
+            ext_cfg = self._config.extension
+            if ext_cfg is not None:
+                user_data_dir = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+                subprocess.Popen([
+                    "open", "-a", "Google Chrome",
+                    "--args",
+                    f"--user-data-dir={user_data_dir}",
+                    f"--profile-directory={ext_cfg.chrome_profile}",
+                    f"--load-extension={ext_cfg.extension_path}",
+                    "--no-first-run",
+                ])
+            else:
+                subprocess.Popen(["open", "-a", "Google Chrome"])
+            logger.info("bookmark_guard.responder.chrome_restarted")
+
         return outcomes
 
     # -------------------------------------------------------- chrome check
@@ -103,14 +120,25 @@ class BookmarkResponder:
         if not _is_chrome_running():
             return
 
-        detail = (
-            "Google Chrome is currently running. "
-            "Bookmark files cannot be safely modified while Chrome is open."
+        logger.warning(
+            "bookmark_guard.responder.chrome_running.force_closing",
+            extra={"hostname": result.hostname},
         )
-        if self._config.stop_if_chrome_running and not self._config.dry_run:
-            raise ChromeRunningError(detail)
 
-        logger.warning("bookmark_guard.responder.chrome_running", extra={"detail": detail})
+        # Graceful quit first; hard-kill if Chrome is still up after 5 s.
+        subprocess.run(
+            ["osascript", "-e", 'tell application "Google Chrome" to quit'],
+            capture_output=True,
+        )
+        for _ in range(5):
+            time.sleep(1)
+            if not _is_chrome_running():
+                break
+        else:
+            subprocess.run(["pkill", "-9", "Google Chrome"], capture_output=True)
+            time.sleep(1)
+
+        logger.info("bookmark_guard.responder.chrome_closed")
 
     # -------------------------------------------------- bookmark removal
 

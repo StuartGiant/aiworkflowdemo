@@ -64,6 +64,17 @@ patterns:
     pattern: '\bnetflix\.com(?:[/?:#]|$)'
 
 
+# ── Chrome extension ─────────────────────────────────────────────────────────
+# When extension_id is set, the responder launches Chrome and lets the extension
+# remove bookmarks via chrome.bookmarks.remove() (sync-safe). It then re-scans
+# to verify, falling back to direct file-based removal if any bookmark remains.
+# Remove or comment out extension_id to always use file-based removal.
+extension:
+  extension_path: src/chrome_extension/bookmark_guard   # path to unpacked extension dir
+  chrome_profile: Profile 1                             # Chrome profile to target
+  launch_wait_seconds: 12                               # wait for onStartup service worker
+
+
 # ── Notification ─────────────────────────────────────────────────────────────
 # sender_email: the address the service account impersonates via DWD to send mail.
 # GOOGLE_SERVICE_ACCOUNT_KEY_PATH must be set in .env (it is a secret).

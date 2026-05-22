@@ -38,7 +38,7 @@ class ScanResult:
 @dataclass(frozen=True)
 class RemovalOutcome:
     match: BookmarkMatch
-    action_taken: Literal["removed", "failed", "skipped"]
+    action_taken: Literal["removed", "removed_by_extension", "failed", "skipped"]
     action_error: str | None = None
     evidence_artefact_id: str | None = None  # UUID of preserved Bookmarks snapshot
 

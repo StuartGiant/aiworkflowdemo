@@ -17,14 +17,22 @@ Detects and removes Chrome bookmarks and homepages that contain sensitive URLs (
 **How it works:**
 
 - **Detection** — Reads Chrome `Bookmarks` and `Preferences` files for every Chrome profile on the host. Only corporate profiles (`@zeroinsiderai.com`) are scanned; personal profiles are skipped entirely.
+- **Chrome force-close** — If Chrome is running when the script fires, it is gracefully quit (AppleScript). If Chrome does not close within 5 seconds it is hard-killed (`pkill -9`). This ensures the Bookmarks file is not locked during modification.
 - **Evidence preservation** — Before any modification, the raw `Bookmarks` file is snapshotted into the evidence vault (MinIO) with a signed manifest and chain-of-custody record. The artefact ID is linked to the violation row.
-- **Response** — Matching bookmarks and homepages are atomically removed from Chrome's profile files.
+- **Response** — Matching bookmarks and homepages are atomically removed from Chrome's profile files (`.tmp` → `os.replace`). Chrome's bookmark checksum is cleared so it recalculates silently on next launch.
 - **Violation record** — Each removal is written to the `bookmark_violations` table in PostgreSQL, including the URL, pattern matched, action taken, and evidence artefact ID.
 - **Notification** — An email is sent to the employee via Gmail (Google Workspace Domain-Wide Delegation) informing them that sensitive bookmarks were detected and removed.
+- **Chrome restart** — If Chrome was running when the script started, it is relaunched with `--load-extension` pointing at the companion extension. This triggers `onInstalled` → `scanAll()` inside Chrome, catching any bookmarks Chrome Sync restores after startup. A second scan fires 5 seconds later via the `sync_check` alarm to handle Sync race conditions.
 
 **Chrome extension (sync-safe enforcement):**
 
-Because Chrome Sync can restore removed bookmarks when Chrome reconnects to Google's servers, a companion Manifest V3 Chrome extension provides real-time enforcement inside Chrome itself. It uses `chrome.bookmarks.remove()` — a Chrome-internal call — so the deletion is propagated through sync to all the user's devices. The extension runs on startup and on every new bookmark creation.
+A companion Manifest V3 Chrome extension handles Sync-restored bookmarks inside Chrome itself. It uses `chrome.bookmarks.remove()` — a Chrome-internal call — so the deletion is treated as a user action and propagated through Sync to all the user's devices.
+
+The extension is loaded via `--load-extension` each time the Python responder relaunches Chrome after a remediation run. It fires on two triggers:
+- `onInstalled` — immediate scan when the extension loads
+- `sync_check` alarm — re-scan 5 seconds after load to catch Sync-restored bookmarks
+
+The `onCreated` real-time listener is intentionally disabled; enforcement only runs at startup.
 
 For enterprise rollout the extension is deployed as a force-installed managed extension via Google Workspace Admin Console (users cannot remove it).
 
@@ -45,6 +53,7 @@ For enterprise rollout the extension is deployed as a force-installed managed ex
 | `db/0005_bookmark_violations_artefact.sql` | Adds `evidence_artefact_id` FK to violations |
 | `db/0006_source_system_bookmark_guard.sql` | Adds `bookmark_guard.chrome` to `source_system` enum |
 | `db/0007_evidence_writer_cases_insert.sql` | Grants `evidence_writer` INSERT on `cases` |
+| `db/0008_action_taken_extension.sql` | Adds `removed_by_extension` to `action_taken` enum |
 
 **Run (dry run — no changes):**
 ```bash
@@ -60,7 +69,7 @@ DYLD_LIBRARY_PATH=/opt/homebrew/opt/libpq/lib \
 python scripts/run_bookmark_guard.py --config config/bookmark_guard.yml
 ```
 
-> Chrome must be closed before a live run. If Chrome is open, it will overwrite file changes on next sync. The Chrome extension handles the real-time / sync-safe layer.
+> Chrome does not need to be closed before running — the responder force-closes it automatically if it is open, then relaunches it with the companion extension loaded after remediation is complete.
 
 **Detection patterns** (defined in `config/bookmark_guard.yml`):
 
