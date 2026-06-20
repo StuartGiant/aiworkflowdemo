@@ -89,6 +89,116 @@ python scripts/run_bookmark_guard.py --config config/bookmark_guard.yml
 
 ---
 
+### 2. Google Chat Ingest
+
+Pulls Google Chat message history from the domain into OpenSearch for threat hunting and insider threat correlation. Covers two source sets:
+
+- **Spaces** — all named spaces and group chats in the domain (SPACE + GROUP_CHAT types)
+- **DMs** — direct-message threads for a configured list of PoI (Person of Interest) subjects; the service account DWD-impersonates each PoI to discover their DM spaces
+
+For DM messages, the recipient is resolved at collection time via `spaces.members.list` and embedded in the raw document as `_space_members`, so both parties are available for entity correlation without a separate join.
+
+**How it works:**
+
+- **Watermark** — Each run reads the `watermark_end` of the most recent completed `pipeline_runs` row to fetch only new messages. First run defaults to 24 hours ago. Override with `--start` / `--end`.
+- **Fetch** — Calls Google Chat API v1 (`spaces.list`, `spaces.members.list`, `spaces.messages.list`) via service account with Domain-Wide Delegation.
+- **Write** — Events are bulk-written to OpenSearch in batches of 500. Duplicate messages (re-run of the same window) are silently skipped via `op_type=create`.
+- **Pipeline state** — Each run writes a `pipeline_runs` row (status, watermark, record counts). Connector failures write to `pipeline_errors` for analyst review.
+
+**Storage:**
+
+| Store | What is written |
+|-------|----------------|
+| OpenSearch | Raw Chat message documents (full JSON per message) |
+| PostgreSQL `pipeline_runs` | Watermark, status, records in/out per run |
+| PostgreSQL `pipeline_errors` | Dead-lettered items on connector failure |
+
+Evidence artefacts (MinIO) are **not** written by this ingest — Chat messages are raw operational logs, not forensic artefacts. Evidence preservation applies at the detection and response stages.
+
+**OpenSearch index pattern:**
+```
+raw-events-google_workspace_chat-YYYY.MM.DD
+```
+
+**Document fields (per message):**
+
+| Field | Source |
+|-------|--------|
+| `event_id` | `message.name` (e.g. `spaces/XYZ/messages/ABC`) |
+| `occurred_at_utc` | `message.createTime` |
+| `source_system` | `google_workspace.chat` |
+| `sender` | `message.sender` (email, displayName, type) |
+| `text` | `message.text` (plaintext body) |
+| `attachment` | `message.attachment[]` (file metadata, Drive IDs) |
+| `_space_members` | DM only — both parties' email and displayName |
+| `sha256` | SHA-256 of canonical `raw_json` |
+
+**Components:**
+
+| Path | Description |
+|------|-------------|
+| `src/ingest/protocol.py` | `ConnectorProtocol`, `RawEvent`, `HealthStatus` (ADR 0004) |
+| `src/ingest/errors.py` | `ConnectorError` hierarchy |
+| `src/ingest/connectors/google_chat.py` | `GoogleChatConnector` — spaces, DM discovery, member fetch, message pagination |
+| `src/ingest/runner.py` | Watermark resolution, OpenSearch bulk write, `pipeline_runs` management |
+| `config/pipeline.yml` | Connector settings, batch size, OpenSearch connection |
+| `scripts/run_ingest.py` | CLI entry point (`--start`, `--end`, `--dry-run`, `--verbose`) |
+| `stuart_tests/validate_google_chat_dwd.py` | Validates DWD scopes and API connectivity |
+| `db/0009_google_chat_source_system.sql` | Adds `google_workspace.chat` to `source_system` enum; inserts ingest sentinel case |
+
+**DWD scopes required** (add all five to the service account in Google Workspace Admin > Security > API Controls > Domain-wide Delegation):
+```
+https://www.googleapis.com/auth/chat.spaces.readonly
+https://www.googleapis.com/auth/chat.memberships.readonly
+https://www.googleapis.com/auth/chat.messages.readonly
+https://www.googleapis.com/auth/chat.admin.spaces.readonly
+https://www.googleapis.com/auth/chat.admin.memberships.readonly
+```
+
+**Validate credentials:**
+```bash
+source venv/bin/activate
+DYLD_LIBRARY_PATH=/opt/homebrew/opt/libpq/lib \
+python stuart_tests/validate_google_chat_dwd.py
+```
+
+**Run (dry run — fetch and log, no writes):**
+```bash
+source venv/bin/activate
+DYLD_LIBRARY_PATH=/opt/homebrew/opt/libpq/lib \
+python scripts/run_ingest.py --dry-run --verbose
+```
+
+**Run (live):**
+```bash
+source venv/bin/activate
+DYLD_LIBRARY_PATH=/opt/homebrew/opt/libpq/lib \
+python scripts/run_ingest.py
+```
+
+**Run a specific time window:**
+```bash
+python scripts/run_ingest.py --start 2026-06-20T00:00:00Z --end 2026-06-20T23:59:59Z
+```
+
+**Add PoI subjects for DM ingestion** — edit `config/pipeline.yml`:
+```yaml
+ingest:
+  connectors:
+    google_chat:
+      dms:
+        poi_emails:
+          - jane.doe@zeroinsiderai.com
+```
+
+**Query messages in OpenSearch:**
+```bash
+curl -s "http://localhost:9200/raw-events-google_workspace_chat-*/_count"
+curl -s "http://localhost:9200/raw-events-google_workspace_chat-*/_search?pretty&size=5"
+```
+
+---
+
 ## Evidence data model
 
 Each automation run that results in a removal produces a fully linked evidence chain:
@@ -181,6 +291,8 @@ Apply in order. Each script is idempotent-safe when re-run on a clean DB:
 | `0005_bookmark_violations_artefact.sql` | `evidence_artefact_id` FK on violations |
 | `0006_source_system_bookmark_guard.sql` | Extends `source_system` enum |
 | `0007_evidence_writer_cases_insert.sql` | Grants INSERT on `cases` to evidence_writer |
+| `0008_action_taken_extension.sql` | Adds `removed_by_extension` to `action_taken` enum |
+| `0009_google_chat_source_system.sql` | Adds `google_workspace.chat` to `source_system` enum; inserts ingest sentinel case |
 
 ---
 
@@ -191,7 +303,8 @@ Apply in order. Each script is idempotent-safe when re-run on a clean DB:
 - libpq (`brew install libpq`)
 - Docker Desktop
 - Google Workspace service account with Domain-Wide Delegation
-  - Scopes: `admin.reports.audit.readonly`, `gmail.send`
+  - Bookmark Guard scopes: `admin.reports.audit.readonly`, `gmail.send`
+  - Google Chat ingest scopes: `chat.spaces.readonly`, `chat.memberships.readonly`, `chat.messages.readonly`, `chat.admin.spaces.readonly`, `chat.admin.memberships.readonly`
 - Ed25519 signing keypair (see `keys/`)
 
 Install Python dependencies:

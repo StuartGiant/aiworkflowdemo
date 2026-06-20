@@ -222,3 +222,6 @@ __marimo__/
 keys/
 backups/
 memory/
+
+# Stuart test folder
+stuart_tests/

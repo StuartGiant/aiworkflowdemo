@@ -1,0 +1,63 @@
+# AI Workflow Demo — pipeline configuration
+# Secrets (keys, passwords, access tokens) come from .env — never in this file.
+
+# ── Ingest stage ──────────────────────────────────────────────────────────────
+ingest:
+  # Fixed UUID for the sentinel case that holds raw ingest evidence before
+  # a real investigation case is opened. Inserted by migration 0009.
+  sentinel_case_id: "00000000-0000-0000-0000-000000000001"
+
+  # Events are buffered and flushed to OpenSearch + evidence in batches.
+  batch_write_size: 500
+
+  # OpenSearch index prefix. Final name: {prefix}-{source_system}-{YYYY.MM.DD}
+  # e.g. raw-events-google_workspace_chat-2026.06.20
+  index_prefix: "raw-events"
+
+  connectors:
+
+    # ── Google Chat ──────────────────────────────────────────────────────────
+    google_chat:
+      enabled: true
+
+      # Secrets: GOOGLE_SERVICE_ACCOUNT_KEY_PATH and GOOGLE_WORKSPACE_ADMIN_EMAIL
+      # are read from environment variables (see .env.example).
+
+      # Non-DM spaces: ingest all SPACE and GROUP_CHAT spaces in the domain.
+      spaces:
+        enabled: true
+        # space_types drives separate API calls (Chat API does not support OR filters).
+        space_types:
+          - SPACE
+          - GROUP_CHAT
+
+      # DM spaces: ingest direct-message threads for each listed PoI subject.
+      # The service account DWD-impersonates each user to discover their DM spaces.
+      # Populate this list per investigation.
+      dms:
+        enabled: true
+        poi_emails: []
+          # - jane.doe@corp.com
+          # - john.smith@corp.com
+
+      # Chat API pagination and behaviour settings.
+      page_size: 1000           # max messages per API page (Chat API max: 1000)
+      inter_page_delay_ms: 200  # courtesy delay between pages (ms)
+      http_timeout_seconds: 30
+      max_retries: 3
+
+
+# ── OpenSearch connection ──────────────────────────────────────────────────────
+# Override host/port with OPENSEARCH_HOST / OPENSEARCH_PORT env vars.
+opensearch:
+  host: "127.0.0.1"
+  port: 9200
+
+
+# ── Postgres (pipeline state) ─────────────────────────────────────────────────
+# All credentials come from env vars (POSTGRES_WRITER_USER etc.).
+# These structural values are defaults; override with POSTGRES_HOST / POSTGRES_PORT.
+postgres:
+  host: "127.0.0.1"
+  port: 5432
+  database: "aiwf"
