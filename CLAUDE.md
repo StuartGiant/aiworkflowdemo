@@ -51,6 +51,7 @@ Stuart Chen, Insider Threat SME on the Cybersecurity team. I investigate suspici
 | Name | What |
 |------|------|
 | **AI workflow demo** | Automated insider threat pipeline: log ingest → normalise → correlate → analyse → evidence → report |
+| **Content moderation** | Real-time Google Chat moderation: keyword + LLM text screening, Cloud Vision image violence detection, Pub/Sub listener, case/evidence creation |
 → Details: memory/projects/
 
 ## Code execution

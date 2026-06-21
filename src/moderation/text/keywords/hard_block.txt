@@ -1,0 +1,53 @@
+# Hard-block keyword list — terms that are NEVER acceptable in a work context.
+#
+# Matches here skip the LLM screener entirely and go straight to BLOCK.
+# Only add terms where context cannot make them legitimate.
+#
+# Format: one term per line; lines starting with # are comments.
+# Case-insensitive matching is applied at runtime.
+
+# --- Payment card fraud (explicit offers) ---
+fullz for sale
+cc dumps
+cvv shop
+cvv2 shop
+dumps with pin
+bins for sale
+cashout method
+bank login for sale
+paypal logs
+bank logs
+
+# --- Credential / access selling ---
+selling access
+admin credentials for sale
+rdp for sale
+ssh brute
+botnet for hire
+botnet for sale
+ddos for hire
+stresser service
+
+# --- Malware / exploit sales ---
+rat for sale
+keylogger for sale
+ransomware builder
+exploit kit for sale
+zero day for sale
+malware dropper
+
+# --- Data exfiltration (explicit) ---
+database dump for sale
+data dump for sale
+employee data for sale
+customer data for sale
+source code for sale
+proprietary data
+
+# --- Explicit sexual content ---
+child porn
+cp for sale
+loli
+underage porn
+teen porn
+nude minors

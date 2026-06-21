@@ -33,5 +33,27 @@ google-auth==2.40.2
 PyYAML==6.0.2
 
 # .env loader for local development
-# Used by: scripts/run_bookmark_guard.py
+# Used by: scripts/run_bookmark_guard.py, scripts/run_content_moderation.py
 python-dotenv==1.1.0
+
+# ── Content moderation ────────────────────────────────────────────────────
+
+# Anthropic Claude API — LLM semantic screener (Layer 2 text moderation)
+# Used by: src/moderation/text/llm_screener.py
+anthropic==0.111.0
+
+# Google Cloud Vision — image violence detection (Phase 1, SafeSearch)
+# Used by: src/moderation/image/violence_detector.py
+google-cloud-vision==3.14.0
+
+# Google Cloud Pub/Sub — Chat Events subscription listener
+# Used by: src/moderation/chat_listener.py
+google-cloud-pubsub==2.39.0
+
+# Pillow — GIF frame sampling for multi-frame image moderation
+# Used by: src/moderation/image/violence_detector.py
+Pillow==12.2.0
+
+# Flask — HTTP server for Google Chat interactive card callbacks (button clicks)
+# Used by: src/moderation/actions/interaction_handler.py
+flask==3.1.0
