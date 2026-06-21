@@ -312,10 +312,10 @@ https://www.googleapis.com/auth/gmail.send
 **Required env vars** (add to `.env`):
 ```
 ANTHROPIC_API_KEY=sk-ant-...
-MODERATION_REVIEWER_EMAIL=stuart.chen@zeroinsiderai.com
+MODERATION_REVIEWER_EMAIL=<change me>
 MODERATION_REVIEWER_CHAT_USER_ID=users/<numeric_id>
-PUBSUB_PROJECT_ID=ai-workflow-demo-496914
-PUBSUB_SUBSCRIPTION_ID=chat-events-sub
+PUBSUB_PROJECT_ID=a<change me>
+PUBSUB_SUBSCRIPTION_ID=<change me>
 WORKSPACE_EVENTS_SUBSCRIPTION_NAME=subscriptions/<subscription_name>
 INTERACTION_BASE_URL=https://<ngrok-id>.ngrok-free.app
 ```
