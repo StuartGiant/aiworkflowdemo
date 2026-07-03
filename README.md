@@ -346,6 +346,52 @@ No other code changes required.
 
 ---
 
+### 4. Fraud Detection Demo (standalone — interview project)
+
+Self-contained ML pipeline and offline HTML demo for fraud detection on the Kaggle IEEE-CIS Fraud Detection dataset. Built as a technical-interview artefact and is **not integrated** with the insider-threat evidence pipeline above — it does not write to `cases`, `evidence_items`, or any of the Postgres/MinIO/OpenSearch infrastructure. It lives in this repo for convenience only.
+
+**Pipeline stages** (`src/fraud_detection_demo/`, run in order):
+
+| Script | Stage |
+|--------|-------|
+| `00_eda.py` | Loads `train_transaction.csv` / `train_identity.csv`, reports fraud rate, null rates, identity-join coverage |
+| `01_feature_engineering.py` | Four signal layers → `train_engineered.parquet`: **velocity** (rolling tx count/value per card, 1h/24h), **ratio** (refund/chargeback rates from `C` columns + email nulls), **interaction** (new account + high value + express shipping combo flags), **network** (card/billing/device country mismatch, shared device/email/phone linkage counts) |
+| `02_train_model.py` | Trains XGBoost (`scale_pos_weight≈30`, `aucpr` eval metric) + isotonic calibration (`CalibratedClassifierCV`) → `models/fraud_xgb_calibrated.pkl`, `test_predictions.parquet` |
+| `03_threshold_and_cost.py` | Cost-based operating point: sweeps the PR curve minimizing `C_FN*(missed fraud) + C_FP*(false positives)` (`C_FN=$420`, `C_FP=$6`), overlays an analyst-capacity ceiling (200 reviews/day) |
+| `04_adversarial_drift.py` | Simulates an amount-capping evasion strategy (fraud capped ≤$50–80 to dodge velocity/amount signals); shows recall degradation at the fixed threshold |
+| `05_shap_export.py` | `shap.TreeExplainer` reason codes — top-5 SHAP contributors per transaction, framed as adverse-action explanations |
+| `06_hyperparameter_search.py` | Head-to-head `RandomizedSearchCV` vs. Optuna (TPE) on the same search space/budget — compares wall-clock cost, sample efficiency, and final PR-AUC/F-β/cost vs. the hand-picked baseline |
+| `build_demo.py` | Bakes `demo/data_export.json` into `demo/index.html` → self-contained `demo/demo_standalone.html` (no server, no model dependency) |
+| `build_notebooks.py` | Regenerates the `jupyter/*.ipynb` notebooks from the numbered scripts above |
+
+**Outputs (gitignored, reproducible from the scripts):**
+
+| Path | Contents |
+|------|----------|
+| `data/ieee-fraud-detection/` | Kaggle source CSVs + engineered parquet + test predictions |
+| `models/fraud_xgb_calibrated.pkl` | Calibrated baseline model |
+| `models/fraud_xgb_tuned.pkl` | Optuna-tuned model from stage 06 |
+
+**Demo UI** (`src/fraud_detection_demo/demo/`): input panel (amount, account age, card/billing country, shipping type, recent tx velocity, device type) driving a client-side decision pipeline — fraud probability, decision tier (ALLOW / STEP-UP / MANUAL REVIEW / AUTO-BLOCK), SHAP reason-code chart, cost-threshold slider with live PR curve, adversarial-drift toggle with PSI gauge, and a mock review queue.
+
+**Run the full pipeline:**
+```bash
+source venv/bin/activate
+python src/fraud_detection_demo/00_eda.py
+python src/fraud_detection_demo/01_feature_engineering.py
+python src/fraud_detection_demo/02_train_model.py
+python src/fraud_detection_demo/03_threshold_and_cost.py
+python src/fraud_detection_demo/04_adversarial_drift.py
+python src/fraud_detection_demo/05_shap_export.py
+python src/fraud_detection_demo/06_hyperparameter_search.py
+python src/fraud_detection_demo/build_demo.py
+```
+Open `src/fraud_detection_demo/demo/demo_standalone.html` directly in a browser — no server required.
+
+**Docs:** `docs/round2_fraud_demo_build_plan.md` (build plan), `docs/fraud_detection_demo_key_concepts_points.html` (talking-points deck).
+
+---
+
 ## Evidence data model
 
 Each automation run that results in a removal produces a fully linked evidence chain:
