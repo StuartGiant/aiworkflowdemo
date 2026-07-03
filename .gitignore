@@ -225,3 +225,7 @@ memory/
 
 # Stuart test folder
 stuart_tests/
+
+# Large data/model artifacts (fraud detection demo)
+data/
+models/
