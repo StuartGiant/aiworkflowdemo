@@ -51,7 +51,9 @@ class ActionsConfig:
 class PubSubConfig:
     project_id: str = ""
     subscription_id: str = ""
-    workspace_events_subscription_name: str = ""  # for auto-reactivation
+    topic_id: str = ""                             # Pub/Sub topic name (for sub recreation)
+    workspace_events_subscription_name: str = ""   # for auto-renewal / recreation
+    workspace_events_target_resource: str = ""     # e.g. //chat.googleapis.com/spaces/XXXXX
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +136,9 @@ def load_config(config_path: Optional[Path] = None) -> ModerationConfig:
     )
     pubsub_project = os.environ.get("PUBSUB_PROJECT_ID", "")
     pubsub_sub = os.environ.get("PUBSUB_SUBSCRIPTION_ID", "")
+    pubsub_topic = os.environ.get("PUBSUB_TOPIC_ID", "")
     workspace_events_sub = os.environ.get("WORKSPACE_EVENTS_SUBSCRIPTION_NAME", "")
+    workspace_events_target = os.environ.get("WORKSPACE_EVENTS_TARGET_RESOURCE", "")
 
     interaction_raw = raw.get("interaction_server", {})
 
@@ -161,7 +165,9 @@ def load_config(config_path: Optional[Path] = None) -> ModerationConfig:
         pubsub=PubSubConfig(
             project_id=pubsub_project,
             subscription_id=pubsub_sub,
+            topic_id=pubsub_topic,
             workspace_events_subscription_name=workspace_events_sub,
+            workspace_events_target_resource=workspace_events_target,
         ),
         interaction_server=InteractionServerConfig(
             host=interaction_raw.get("host", "0.0.0.0"),

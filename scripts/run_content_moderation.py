@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.evidence.logging_config import configure_logging  # noqa: E402
-from src.moderation.actions.card_builder import set_interaction_base_url  # noqa: E402
+from src.moderation.actions.card_builder import set_hmac_secret, set_interaction_base_url  # noqa: E402
 from src.moderation.actions.interaction_handler import create_app  # noqa: E402
 from src.moderation.chat_listener import ChatListener  # noqa: E402
 from src.moderation.config import load_config  # noqa: E402
@@ -87,6 +87,8 @@ def main() -> None:
         "GOOGLE_WORKSPACE_ADMIN_EMAIL",
         "PUBSUB_PROJECT_ID",
         "PUBSUB_SUBSCRIPTION_ID",
+        "INTERACTION_BASE_URL",
+        "MODERATION_HMAC_SECRET",
     ]
     missing = [v for v in required if not os.environ.get(v)]
     if missing:
@@ -116,20 +118,22 @@ def main() -> None:
 
     # Set the public base URL used to build disposition button links in cards.
     # Must be the publicly reachable URL (e.g. ngrok https URL), not localhost.
-    interaction_base_url = os.environ.get("INTERACTION_BASE_URL", "")
-    if interaction_base_url:
-        set_interaction_base_url(interaction_base_url)
-        log.info("moderation.interaction_server.base_url",
-                 extra={"context": {"url": interaction_base_url}})
-    else:
-        log.warning("moderation.interaction_server.no_base_url",
-                    extra={"context": {"hint": "Set INTERACTION_BASE_URL to the public ngrok URL"}})
+    interaction_base_url = os.environ["INTERACTION_BASE_URL"]
+    set_interaction_base_url(interaction_base_url)
+    log.info("moderation.interaction_server.base_url",
+             extra={"context": {"url": interaction_base_url}})
+
+    hmac_secret = os.environ["MODERATION_HMAC_SECRET"]
+    set_hmac_secret(hmac_secret)
 
     # Start the interaction server (button click callbacks) in a background thread
+    chat_audience = f"{interaction_base_url}/chat/interactions"
     flask_app = create_app(
         db_dsn=db_dsn,
         sa_key_path=config.service_account_key_path,
         admin_email=admin_email,
+        hmac_secret=hmac_secret.encode(),
+        chat_audience=chat_audience,
     )
     srv_cfg = config.interaction_server
     flask_thread = threading.Thread(

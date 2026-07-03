@@ -12,13 +12,16 @@ Setup:
 
 from __future__ import annotations
 
+import hashlib
+import hmac as _hmac
 import logging
 import uuid
 from pathlib import Path
 
 import psycopg
 from flask import Flask, jsonify, request
-from google.oauth2 import service_account
+from google.auth.transport import requests as grequests
+from google.oauth2 import id_token, service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -33,8 +36,37 @@ _DWD_SCOPES = [
     "https://www.googleapis.com/auth/chat.spaces.readonly",
 ]
 
+_CHAT_ISSUER = "chat@system.gserviceaccount.com"
+_CHAT_CERT_URL = f"https://www.googleapis.com/service_accounts/v1/jwk/{_CHAT_ISSUER}"
 
-def create_app(db_dsn: str, sa_key_path: Path, admin_email: str) -> Flask:
+
+def _verify_disposition_token(secret: bytes, case_id: str, disposition: str, token: str) -> bool:
+    """Timing-safe HMAC-SHA256 verification of a disposition link token."""
+    expected = _hmac.new(secret, f"{case_id}:{disposition}".encode(), hashlib.sha256).hexdigest()
+    return _hmac.compare_digest(expected, token)
+
+
+def _verify_chat_jwt(bearer_token: str, audience: str) -> bool:
+    """Verify a Google Chat service-account Bearer JWT and its audience claim."""
+    try:
+        claims = id_token.verify_token(
+            bearer_token,
+            grequests.Request(),
+            audience=audience,
+            certs_url=_CHAT_CERT_URL,
+        )
+        return claims.get("iss") == _CHAT_ISSUER
+    except Exception:
+        return False
+
+
+def create_app(
+    db_dsn: str,
+    sa_key_path: Path,
+    admin_email: str,
+    hmac_secret: bytes,
+    chat_audience: str,
+) -> Flask:
     """Create the Flask app with DB and Chat API credentials."""
     app = Flask(__name__)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -44,9 +76,15 @@ def create_app(db_dsn: str, sa_key_path: Path, admin_email: str) -> Flask:
         """Handles reviewer button clicks via browser link (openLink buttons)."""
         case_id_str = request.args.get("case_id", "")
         disposition = request.args.get("disposition", "")
+        token = request.args.get("token", "")
 
         if not case_id_str or disposition not in _VALID_DISPOSITIONS:
             return "<h2>❌ Invalid request.</h2>", 400
+
+        if not token or not _verify_disposition_token(hmac_secret, case_id_str, disposition, token):
+            log.warning("moderation.interaction.invalid_token",
+                        extra={"context": {"case_id": case_id_str}})
+            return "<h2>❌ Invalid or missing token.</h2>", 403
 
         try:
             case_id = uuid.UUID(case_id_str)
@@ -94,6 +132,12 @@ h2{{color:#2d7d2d;}}</style></head>
 
     @app.post("/chat/interactions")
     def interactions():
+        bearer = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        if not bearer or not _verify_chat_jwt(bearer, chat_audience):
+            log.warning("moderation.interaction.jwt_rejected",
+                        extra={"context": {"remote": request.remote_addr}})
+            return jsonify({"error": "Unauthorized"}), 401
+
         log.info(
             "moderation.interaction.received",
             extra={"context": {"body": str(request.data[:500])}},

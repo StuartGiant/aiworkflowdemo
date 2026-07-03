@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-20
 - **Author:** Stuart Chen (Insider Threat SME)
-- **Status:** Approved — pending implementation
+- **Status:** Implemented — security-hardened 2026-06-22
 - **Related ADRs:** ADR 0002 (Evidence), ADR 0003 (Pipeline), ADR 0007 (Image Moderation Backend)
 
 ---
@@ -125,6 +125,53 @@ See **ADR 0007** for the two-phase image moderation strategy (Phase 1: Cloud Vis
 
 ---
 
+## Reviewer Interaction Server
+
+A lightweight Flask server handles reviewer disposition decisions (True Positive / False Positive / Inconclusive) when a reviewer clicks a button in the Chat DM card.
+
+**Flow:**
+
+```
+Reviewer clicks button in Chat DM card
+        ↓
+openLink → https://<ngrok-url>/disposition?case_id=...&disposition=...&token=...
+        ↓
+Flask server (localhost:8080, exposed via ngrok)
+        ↓
+HMAC token verified → disposition written to DB → message tombstoned if true_positive
+        ↓
+HTML confirmation page (auto-closes after 3 seconds)
+```
+
+Google Chat also POSTs `CARD_CLICKED` events directly to `/chat/interactions` for in-card button handling.
+
+**Components:**
+
+| File | Purpose |
+|------|---------|
+| `src/moderation/actions/interaction_handler.py` | Flask app: `/disposition` GET + `/chat/interactions` POST |
+| `src/moderation/actions/card_builder.py` | Builds cardsV2 alert cards with signed disposition button URLs |
+
+**Deployment:** the Flask server starts in a daemon thread alongside the Pub/Sub listener when `run_content_moderation.py` is launched. Expose port 8080 publicly with ngrok (`ngrok http 8080`) and set `INTERACTION_BASE_URL` to the resulting https URL.
+
+---
+
+## Workspace Events Subscription Renewal / Recreation
+
+Google Chat Workspace Events subscriptions expire after a maximum 24-hour TTL, and can also be silently suspended or deleted server-side. `ChatListener._reactivate_subscription()` runs on a periodic timer and handles all three cases so the pipeline stays live without manual intervention:
+
+| Observed state | Action taken |
+|---|---|
+| `ACTIVE` | PATCH the TTL back to 24 h (`_renew_subscription_ttl()`) |
+| `SUSPENDED` | POST `:reactivate` |
+| Gone (`403`/`404`) | Recreate the subscription from scratch (`_recreate_subscription()`) |
+
+Recreation POSTs a new subscription for `WORKSPACE_EVENTS_TARGET_RESOURCE` (the Chat space) publishing to the `PUBSUB_TOPIC_ID` topic, then swaps the listener's in-memory subscription name to the newly created one so subsequent renewal checks target the right resource.
+
+**Files changed:** `src/moderation/chat_listener.py` — replaced the old reactivate-only check with the state-based renew/reactivate/recreate logic above.
+
+---
+
 ## New Package: `src/moderation/`
 
 ```
@@ -149,9 +196,11 @@ src/moderation/
 │   └── moderator.py               # maps score → PASS/REVIEW/BLOCK
 └── actions/
     ├── __init__.py
+    ├── card_builder.py            # builds cardsV2 alert cards with signed button URLs
     ├── chat_responder.py          # deletes message; DMs reviewer
     ├── email_notifier.py          # sends review notification email
-    └── case_writer.py             # creates case + evidence records
+    ├── case_writer.py             # creates case + evidence records
+    └── interaction_handler.py    # Flask server for reviewer disposition callbacks
 ```
 
 ---
@@ -205,9 +254,15 @@ MODERATION_REVIEWER_EMAIL=stuart.chen@zeroinsiderai.com
 MODERATION_REVIEWER_CHAT_USER_ID=
 PUBSUB_PROJECT_ID=
 PUBSUB_SUBSCRIPTION_ID=
+INTERACTION_BASE_URL=          # public ngrok https URL, e.g. https://abc123.ngrok-free.app
+MODERATION_HMAC_SECRET=        # 64-char hex string; generate with: python -c "import secrets; print(secrets.token_hex(32))"
+PUBSUB_TOPIC_ID=               # topic name (not full path), used to recreate the Workspace Events subscription if it expires
+WORKSPACE_EVENTS_TARGET_RESOURCE=  # Chat space the subscription monitors, e.g. //chat.googleapis.com/spaces/AAQADyrUsoI
 ```
 
 Note: `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` already exists and is reused for Cloud Vision and Chat API calls. The service account requires additional roles: `roles/cloudvision.reader`, `roles/pubsub.subscriber`.
+
+`INTERACTION_BASE_URL` and `MODERATION_HMAC_SECRET` are **required** — the pipeline will refuse to start if either is missing.
 
 ---
 
@@ -270,6 +325,47 @@ Coverage target: ≥ 80% on `src/moderation/` core logic, consistent with projec
 | 7 | Chat listener (Pub/Sub) | 6 |
 | 8 | `run_content_moderation.py` + config YAML | 7 |
 | 9 | README + CLAUDE.md updates | 8 |
+
+---
+
+## Security Hardening (2026-06-22)
+
+A post-implementation security review identified two HIGH-severity vulnerabilities in the reviewer interaction server. Both were fixed before any production traffic was processed.
+
+---
+
+### Vuln 1 — Unauthenticated `/disposition` endpoint (IDOR / auth bypass)
+
+**Affected file:** `src/moderation/actions/interaction_handler.py`
+
+**Issue:** The `/disposition` GET endpoint accepted `case_id` and `disposition` query parameters and wrote directly to the database with no authentication. Any unauthenticated party who reached the ngrok URL could silently close any open case (`false_positive`) or trigger an admin-credentialed Chat message tombstone (`true_positive`).
+
+**Fix:** Every disposition button URL now includes a per-link HMAC-SHA256 token, computed as `HMAC-SHA256(MODERATION_HMAC_SECRET, "{case_id}:{disposition}")` at card-build time in `card_builder.py`. The `/disposition` handler verifies the token using `hmac.compare_digest()` (timing-safe) before executing any DB write or tombstone action. Requests with a missing or invalid token return HTTP 403.
+
+**Files changed:**
+- `src/moderation/actions/card_builder.py` — added `set_hmac_secret()` and `_sign_disposition()`
+- `src/moderation/actions/interaction_handler.py` — added `_verify_disposition_token()`, token check in `disposition_link()`
+- `scripts/run_content_moderation.py` — reads and passes `MODERATION_HMAC_SECRET`
+
+---
+
+### Vuln 2 — Missing webhook signature verification on `/chat/interactions`
+
+**Affected file:** `src/moderation/actions/interaction_handler.py`
+
+**Issue:** The `/chat/interactions` POST endpoint processed any inbound JSON payload without verifying it originated from Google Chat. An attacker who could reach the ngrok URL could POST a synthetic `CARD_CLICKED` payload to trigger DB writes and admin-credentialed message tombstoning.
+
+**Fix:** The handler now verifies Google Chat's Bearer JWT on every POST using `google.oauth2.id_token.verify_token()` against Chat's public key endpoint (`googleapis.com/service_accounts/v1/jwk/chat@system.gserviceaccount.com`). The issuer claim is checked against `chat@system.gserviceaccount.com` and the audience claim against the configured `INTERACTION_BASE_URL/chat/interactions`. Requests that fail verification return HTTP 401 before any payload is processed.
+
+**Files changed:**
+- `src/moderation/actions/interaction_handler.py` — added `_verify_chat_jwt()`, JWT check at top of `interactions()`
+- `scripts/run_content_moderation.py` — derives and passes `chat_audience` to `create_app()`
+
+---
+
+### Post-fix rescan result
+
+A second security scan after applying the fixes found no remaining HIGH-severity vulnerabilities. The two issues above are the only confirmed security findings on this branch.
 
 ---
 

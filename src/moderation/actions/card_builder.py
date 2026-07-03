@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac as _hmac
+
 from ..models import ModerationAction, ModerationDecision
 
 _DISPOSITION_LABELS = {
@@ -12,11 +15,23 @@ _DISPOSITION_LABELS = {
 
 # Set by the main script at startup — used to build button URLs.
 _interaction_base_url: str = ""
+_hmac_secret: bytes = b""
 
 
 def set_interaction_base_url(url: str) -> None:
     global _interaction_base_url
     _interaction_base_url = url.rstrip("/")
+
+
+def set_hmac_secret(secret: str) -> None:
+    global _hmac_secret
+    _hmac_secret = secret.encode()
+
+
+def _sign_disposition(case_id: str, disposition: str) -> str:
+    """Return hex HMAC-SHA256 of 'case_id:disposition' using the shared secret."""
+    msg = f"{case_id}:{disposition}".encode()
+    return _hmac.new(_hmac_secret, msg, hashlib.sha256).hexdigest()
 
 
 def build_alert_card(
@@ -100,7 +115,11 @@ def _para(text: str) -> dict:
 
 
 def _disposition_button(label: str, case_id: str, disposition: str) -> dict:
-    url = f"{_interaction_base_url}/disposition?case_id={case_id}&disposition={disposition}"
+    token = _sign_disposition(case_id, disposition)
+    url = (
+        f"{_interaction_base_url}/disposition"
+        f"?case_id={case_id}&disposition={disposition}&token={token}"
+    )
     return {
         "text": label,
         "onClick": {"openLink": {"url": url}},

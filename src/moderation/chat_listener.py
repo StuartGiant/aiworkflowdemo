@@ -111,6 +111,11 @@ class ChatListener:
         # Sender email cache: user resource name → email
         self._sender_email_cache: dict[str, str] = {}
 
+        # Mutable sub name — updated in-place if the subscription is recreated
+        self._workspace_events_sub_name: str = (
+            config.pubsub.workspace_events_subscription_name
+        )
+
         # Track last reactivation time for periodic auto-reactivation
         self._last_reactivation: float = time.monotonic()
 
@@ -327,26 +332,126 @@ class ChatListener:
             return sender_ref
 
     def _reactivate_subscription(self) -> None:
-        """Reactivate the Workspace Events subscription to prevent silent suspension."""
-        sub_name = self._config.pubsub.workspace_events_subscription_name
+        """Renew, reactivate, or recreate the Workspace Events subscription.
+
+        Google Chat message subscriptions expire after a maximum of 24 hours.
+        This method is called every _REACTIVATE_INTERVAL_SECONDS and:
+          - PATCHes the TTL back to 24 h when the subscription is ACTIVE
+          - POSTs :reactivate when it is SUSPENDED
+          - Recreates it from scratch when it is gone (403 / 404)
+        """
+        sub_name = self._workspace_events_sub_name
         if not sub_name:
             return
         try:
-            resp = self._workspace_events_session.post(
-                f"https://workspaceevents.googleapis.com/v1/{sub_name}:reactivate",
-                json={},
+            resp = self._workspace_events_session.get(
+                f"https://workspaceevents.googleapis.com/v1/{sub_name}"
             )
+
             if resp.status_code == 200:
-                log.info("moderation.chat_listener.subscription_reactivated",
-                         extra={"context": {"subscription": sub_name}})
-            else:
+                state = resp.json().get("state", "")
+                if state == "ACTIVE":
+                    self._renew_subscription_ttl(sub_name)
+                elif state == "SUSPENDED":
+                    reactivate = self._workspace_events_session.post(
+                        f"https://workspaceevents.googleapis.com/v1/{sub_name}:reactivate",
+                        json={},
+                    )
+                    if reactivate.status_code == 200:
+                        log.info(
+                            "moderation.chat_listener.subscription_reactivated",
+                            extra={"context": {"subscription": sub_name}},
+                        )
+                    else:
+                        log.warning(
+                            "moderation.chat_listener.reactivation_failed",
+                            extra={"context": {"status": reactivate.status_code, "subscription": sub_name}},
+                        )
+                else:
+                    log.warning(
+                        "moderation.chat_listener.subscription_unexpected_state",
+                        extra={"context": {"state": state, "subscription": sub_name}},
+                    )
+
+            elif resp.status_code in (403, 404):
                 log.warning(
-                    "moderation.chat_listener.reactivation_failed",
+                    "moderation.chat_listener.subscription_gone",
                     extra={"context": {"status": resp.status_code, "subscription": sub_name}},
                 )
+                self._recreate_subscription()
+
+            else:
+                log.warning(
+                    "moderation.chat_listener.subscription_check_failed",
+                    extra={"context": {"status": resp.status_code, "subscription": sub_name}},
+                )
+
         except Exception as exc:
             log.warning(
                 "moderation.chat_listener.reactivation_error",
+                extra={"context": {"err": str(exc)}},
+            )
+
+    def _renew_subscription_ttl(self, sub_name: str) -> None:
+        """PATCH the subscription TTL back to the maximum (24 h) to prevent expiry."""
+        resp = self._workspace_events_session.patch(
+            f"https://workspaceevents.googleapis.com/v1/{sub_name}",
+            params={"updateMask": "ttl"},
+            json={"ttl": "86400s"},
+        )
+        if resp.status_code == 200:
+            log.info(
+                "moderation.chat_listener.subscription_renewed",
+                extra={"context": {"subscription": sub_name}},
+            )
+        else:
+            log.warning(
+                "moderation.chat_listener.renewal_failed",
+                extra={"context": {"status": resp.status_code, "subscription": sub_name}},
+            )
+
+    def _recreate_subscription(self) -> None:
+        """Delete (if present) and recreate the Workspace Events subscription."""
+        target = self._config.pubsub.workspace_events_target_resource
+        topic = (
+            f"projects/{self._config.pubsub.project_id}"
+            f"/topics/{self._config.pubsub.topic_id}"
+        )
+        if not target or not self._config.pubsub.topic_id:
+            log.error(
+                "moderation.chat_listener.recreation_skipped",
+                extra={"context": {"reason": "WORKSPACE_EVENTS_TARGET_RESOURCE or PUBSUB_TOPIC_ID not set"}},
+            )
+            return
+        try:
+            resp = self._workspace_events_session.post(
+                "https://workspaceevents.googleapis.com/v1/subscriptions",
+                json={
+                    "targetResource": target,
+                    "eventTypes": ["google.workspace.chat.message.v1.created"],
+                    "notificationEndpoint": {"pubsubTopic": topic},
+                    "payloadOptions": {"includeResource": True},
+                },
+            )
+            if resp.status_code == 200:
+                new_name = (
+                    resp.json()
+                    .get("response", resp.json())
+                    .get("name", self._workspace_events_sub_name)
+                )
+                self._workspace_events_sub_name = new_name
+                log.info(
+                    "moderation.chat_listener.subscription_recreated",
+                    extra={"context": {"subscription": new_name}},
+                )
+            else:
+                log.error(
+                    "moderation.chat_listener.recreation_failed",
+                    extra={"context": {"status": resp.status_code, "body": resp.text[:300]}},
+                )
+        except Exception as exc:
+            log.error(
+                "moderation.chat_listener.recreation_error",
                 extra={"context": {"err": str(exc)}},
             )
 
