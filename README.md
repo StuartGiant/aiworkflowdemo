@@ -199,6 +199,153 @@ curl -s "http://localhost:9200/raw-events-google_workspace_chat-*/_search?pretty
 
 ---
 
+### 3. Content Moderation
+
+Real-time content moderation for Google Chat messages. Screens text and image attachments within ~1–2 seconds of posting, blocks or routes flagged content to human review, and provides a reviewer workflow for case disposition.
+
+**How it works:**
+
+- **Pub/Sub listener** — A Workspace Events API subscription delivers message-created events to a Pub/Sub topic. The listener polls continuously and processes each message through the text and image layers.
+- **Auto-reactivation** — Workspace Events subscriptions expire if not reactivated. The listener calls the reactivate API every 5 minutes automatically.
+- **Sender resolution** — Sender identity is resolved from the Chat user resource name to a real email address via the Admin Directory API (DWD). Results are cached per listener session.
+
+**Text moderation — two-tier keyword routing:**
+
+- **Hard-block tier** (`src/moderation/text/keywords/hard_block.txt`, ~36 terms) — unambiguous terms (fullz, CC dumps, RDP for sale, CSAM, etc.) that auto-BLOCK with no LLM call. Zero false-positive risk.
+- **Soft-flag tier** (`ldnoobw.txt` + `tech_ecommerce_extension.txt`, ~532 terms) — context-dependent terms routed to the LLM screener. `claude-haiku-4-5` determines TRUE_POSITIVE vs FALSE_POSITIVE. If the Anthropic API is unavailable the keyword result stands (fail-safe, not fail-open).
+
+**Image moderation:**
+
+Google Cloud Vision SafeSearch scores images (JPEG, BMP, GIF) for violence on a 0–100 scale. GIFs are frame-sampled at 1 fps (max 30 frames); the worst frame score determines the verdict.
+
+| SafeSearch likelihood | Score | Action |
+|---|---|---|
+| VERY_UNLIKELY / UNLIKELY | 10 / 30 | Pass |
+| POSSIBLE | 60 | Review |
+| LIKELY / VERY_LIKELY | 80 / 95 | Block |
+
+**Decision routing:**
+
+| Text result | Image score | Final action |
+|---|---|---|
+| Pass | 0–50 | Pass — no action |
+| Soft-flag (TRUE_POSITIVE) or — | 51–70 | Human review |
+| Hard-block or soft-flag (TRUE_POSITIVE) or — | 71–100 | Block |
+| Either layer is Block | — | Block overrides Review |
+
+**Actions on BLOCK:**
+1. Original message replaced with tombstone: `🚫 This content has been removed by the Security Content Moderation system.` — text replaced and attachments cleared via `spaces.messages.patch` (DWD credentials)
+2. Case created in `cases` table; text/image evidence preserved in `evidence_items`
+3. Reviewer notified via Google Chat DM (interactive card with disposition buttons) and email
+
+**Actions on REVIEW:**
+1. Message is NOT deleted — reviewer must see the content
+2. Case created in `cases` table; evidence preserved
+3. Reviewer notified via Google Chat DM (interactive card with disposition buttons) and email
+
+**Reviewer disposition workflow:**
+
+The reviewer DM is a `cardsV2` card with three link buttons: **✅ True Positive**, **❌ False Positive**, **❓ Inconclusive**. Clicking a button opens a browser tab pointing at the interaction server (`/disposition?case_id=...&disposition=...`), which:
+- Updates `cases.disposition` in the DB
+- If disposition is `true_positive` on a REVIEW case, tombstones the original message (same patch as BLOCK)
+- Returns a confirmation page that auto-closes in 3 seconds
+
+**Interaction server:**
+
+A Flask HTTP server runs in a background thread on port 8080 (configurable in `config/content_moderation.yml`). It must be exposed publicly via ngrok or a stable HTTPS URL and the public URL set in `INTERACTION_BASE_URL`. The ngrok URL changes on each restart — update `.env` and restart the listener when it does.
+
+**Credentials split:**
+
+| Credential type | Scopes | Used for |
+|---|---|---|
+| DWD (impersonating admin) | `chat.messages`, `chat.spaces.readonly` | Message patch (tombstone), media download |
+| Bot (service account, no DWD) | `chat.bot` | Sending DM cards, `findDirectMessage`, `spaces.setup` |
+| DWD (admin) | `admin.directory.user.readonly` | Resolving sender email from user resource name |
+
+**Image moderation phases (see ADR 0007):**
+
+| Phase | Backend | Status |
+|-------|---------|--------|
+| 1 | Google Cloud Vision SafeSearch | Current |
+| 2 | Local fine-tuned EfficientNet-B3 (privacy-first) | Future — when ≥ 5,000 labelled images accumulate |
+
+**Components:**
+
+| Path | Description |
+|------|-------------|
+| `src/moderation/models.py` | `ContentItem`, `TextVerdict`, `ImageVerdict`, `ModerationDecision` dataclasses |
+| `src/moderation/config.py` | Typed config loader (YAML + env vars); `InteractionServerConfig` |
+| `src/moderation/orchestrator.py` | Combines text + image verdicts, triggers actions, `--dry-run` support |
+| `src/moderation/chat_listener.py` | Pub/Sub subscriber; decodes Chat Events, fetches attachments, auto-reactivates subscription |
+| `src/moderation/text/keyword_filter.py` | Two-tier keyword scan returning `KeywordScanResult` (hard_block_terms, soft_flag_terms) |
+| `src/moderation/text/llm_screener.py` | Anthropic `claude-haiku-4-5` semantic screener |
+| `src/moderation/text/moderator.py` | Hard-block → auto-BLOCK; soft-flag → LLM; no match → PASS |
+| `src/moderation/text/keywords/hard_block.txt` | ~36 unambiguous hard-block terms (no LLM call) |
+| `src/moderation/text/keywords/ldnoobw.txt` | Base soft-flag list (MIT-licensed, ~400 terms) |
+| `src/moderation/text/keywords/tech_ecommerce_extension.txt` | Tech/e-comm soft-flag extension (~130 terms) |
+| `src/moderation/image/protocol.py` | `ImageScorerBackend` pluggable protocol |
+| `src/moderation/image/violence_detector.py` | `VisionAPIBackend` (Phase 1) + `LocalModelBackend` stub (Phase 2) |
+| `src/moderation/image/moderator.py` | Maps score → PASS / REVIEW / BLOCK |
+| `src/moderation/actions/card_builder.py` | Builds `cardsV2` alert cards and resolved-disposition cards |
+| `src/moderation/actions/chat_responder.py` | Tombstones blocked messages; sends card DMs to reviewer |
+| `src/moderation/actions/email_notifier.py` | Sends alert email via Gmail API (DWD) |
+| `src/moderation/actions/case_writer.py` | Creates `cases` + `evidence_items` records |
+| `src/moderation/actions/interaction_handler.py` | Flask app: `/disposition` GET (button link handler), `/chat/interactions` POST (Chat callback fallback) |
+| `config/content_moderation.yml` | Keyword lists, LLM model, image backend, Pub/Sub, interaction server port |
+| `scripts/run_content_moderation.py` | CLI entry point; starts Pub/Sub listener + Flask interaction server in thread |
+| `db/0010_content_moderation.sql` | `moderation_decisions` table + `moderation_action` / `text_verdict_result` enums |
+| `db/0011_moderation_source_system.sql` | Adds `google_workspace.chat_moderation` to `source_system` enum |
+| `db/0012_cases_sender_email.sql` | Adds `sender_email` column to `cases` |
+| `db/0013_disposition_update_grant.sql` | Grants `UPDATE (disposition)` on `cases` to `evidence_writer` |
+| `docs/adr/0007-image-moderation-backend.md` | ADR: two-phase image backend strategy |
+| `tests/moderation/` | Unit + integration tests |
+
+**Required DWD scopes** (add to service account in Google Workspace Admin → Security → API Controls → Domain-wide Delegation):
+```
+https://www.googleapis.com/auth/chat.messages
+https://www.googleapis.com/auth/chat.spaces.readonly
+https://www.googleapis.com/auth/chat.memberships.readonly
+https://www.googleapis.com/auth/admin.directory.user.readonly
+https://www.googleapis.com/auth/gmail.send
+```
+
+**Required env vars** (add to `.env`):
+```
+ANTHROPIC_API_KEY=sk-ant-...
+MODERATION_REVIEWER_EMAIL=<change me>
+MODERATION_REVIEWER_CHAT_USER_ID=users/<numeric_id>
+PUBSUB_PROJECT_ID=a<change me>
+PUBSUB_SUBSCRIPTION_ID=<change me>
+WORKSPACE_EVENTS_SUBSCRIPTION_NAME=subscriptions/<subscription_name>
+INTERACTION_BASE_URL=https://<ngrok-id>.ngrok-free.app
+```
+
+**GCP setup required (one-time):**
+1. Enable: Google Chat API, Cloud Vision API, Cloud Pub/Sub API, Workspace Events API, Admin SDK API
+2. Create a Pub/Sub topic and subscription (`chat-events-sub`)
+3. Create a Workspace Events subscription for the target Chat space pointing at the Pub/Sub topic
+4. Expose port 8080 via ngrok: `ngrok http 8080`; set `INTERACTION_BASE_URL` to the ngrok HTTPS URL
+
+**Run:**
+```bash
+source venv/bin/activate
+python scripts/run_content_moderation.py
+
+# Detection only — no deletions, no DB writes, no notifications
+python scripts/run_content_moderation.py --dry-run
+```
+
+**Switch to local model (Phase 2, when ready):**
+```yaml
+# config/content_moderation.yml
+image_moderation:
+  backend: local_model
+```
+
+No other code changes required.
+
+---
+
 ## Evidence data model
 
 Each automation run that results in a removal produces a fully linked evidence chain:
@@ -293,6 +440,10 @@ Apply in order. Each script is idempotent-safe when re-run on a clean DB:
 | `0007_evidence_writer_cases_insert.sql` | Grants INSERT on `cases` to evidence_writer |
 | `0008_action_taken_extension.sql` | Adds `removed_by_extension` to `action_taken` enum |
 | `0009_google_chat_source_system.sql` | Adds `google_workspace.chat` to `source_system` enum; inserts ingest sentinel case |
+| `0010_content_moderation.sql` | `moderation_decisions` table; `moderation_action` + `text_verdict_result` enums |
+| `0011_moderation_source_system.sql` | Adds `google_workspace.chat_moderation` to `source_system` enum |
+| `0012_cases_sender_email.sql` | Adds `sender_email` column to `cases` |
+| `0013_disposition_update_grant.sql` | Grants `UPDATE (disposition)` on `cases` to `evidence_writer` |
 
 ---
 

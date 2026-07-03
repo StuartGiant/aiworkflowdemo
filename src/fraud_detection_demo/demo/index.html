@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fraud Detection Demo — Xiaomi Singapore</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1117; color: #e2e8f0; font-size: 14px; }
+h1 { font-size: 1.25rem; font-weight: 700; color: #f8fafc; }
+h2 { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 0.75rem; }
+h3 { font-size: 0.8rem; font-weight: 600; color: #cbd5e1; margin-bottom: 0.5rem; }
+
+.app { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; gap: 0; }
+.sidebar { background: #1e2130; border-right: 1px solid #2d3148; padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; overflow-y: auto; }
+.main { padding: 1.25rem; display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; }
+
+.header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 1rem; border-bottom: 1px solid #2d3148; }
+.header-left { display: flex; flex-direction: column; gap: 0.2rem; }
+.subtitle { font-size: 0.75rem; color: #64748b; }
+
+.card { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 8px; padding: 1rem; }
+.card-sm { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 8px; padding: 0.75rem; }
+
+.field { margin-bottom: 0.85rem; }
+.field label { display: block; font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.3rem; }
+.field input[type=range] { width: 100%; accent-color: #6366f1; cursor: pointer; }
+.field select { width: 100%; background: #252840; border: 1px solid #3d4168; color: #e2e8f0; padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
+.field .val { font-size: 0.8rem; color: #c7d2fe; font-weight: 600; float: right; margin-top: -1.1rem; }
+
+/* Probability gauge */
+.gauge-wrap { text-align: center; margin-bottom: 0.5rem; }
+.gauge-prob { font-size: 3rem; font-weight: 800; transition: color 0.3s; }
+.gauge-label { font-size: 0.75rem; color: #94a3b8; margin-top: 0.2rem; }
+.badge { display: inline-block; padding: 0.35rem 0.9rem; border-radius: 999px; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; transition: all 0.3s; }
+.badge-allow     { background: #14532d; color: #4ade80; border: 1px solid #16a34a; }
+.badge-stepup    { background: #713f12; color: #fbbf24; border: 1px solid #d97706; }
+.badge-review    { background: #7c2d12; color: #fb923c; border: 1px solid #ea580c; }
+.badge-block     { background: #450a0a; color: #f87171; border: 1px solid #dc2626; }
+
+/* Top row cards */
+.top-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.mid-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.bot-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+
+/* SHAP bars */
+.shap-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; font-size: 0.75rem; }
+.shap-feat { width: 140px; text-align: right; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shap-bar-wrap { flex: 1; background: #252840; border-radius: 3px; height: 14px; position: relative; overflow: hidden; }
+.shap-bar { height: 100%; border-radius: 3px; transition: width 0.4s; position: absolute; }
+.shap-bar-pos { background: #ef4444; right: 50%; }
+.shap-bar-neg { background: #22c55e; left: 50%; }
+.shap-val { width: 54px; font-size: 0.72rem; color: #cbd5e1; }
+.shap-center { position: absolute; left: 50%; width: 1px; background: #4b5563; height: 100%; }
+
+/* Charts */
+canvas { max-width: 100%; }
+
+/* Threshold slider */
+.threshold-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+.threshold-row input { flex: 1; accent-color: #6366f1; }
+.threshold-row span { font-size: 0.8rem; color: #c7d2fe; font-weight: 600; min-width: 38px; }
+
+/* Adversarial toggle */
+.adv-toggle { display: flex; align-items: center; gap: 0.6rem; cursor: pointer; }
+.adv-toggle input[type=checkbox] { width: 16px; height: 16px; accent-color: #f59e0b; cursor: pointer; }
+.adv-toggle label { font-size: 0.8rem; color: #fbbf24; cursor: pointer; font-weight: 600; }
+
+.psi-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; font-size: 0.75rem; }
+.psi-label { width: 110px; color: #94a3b8; }
+.psi-bar-wrap { flex: 1; background: #252840; border-radius: 3px; height: 10px; overflow: hidden; }
+.psi-bar { height: 100%; border-radius: 3px; transition: width 0.5s, background 0.5s; }
+.psi-val { width: 36px; text-align: right; color: #cbd5e1; }
+
+/* Review queue */
+table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+th { text-align: left; color: #64748b; padding: 0.3rem 0.4rem; border-bottom: 1px solid #2d3148; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.68rem; }
+td { padding: 0.4rem; border-bottom: 1px solid #1e2130; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: #252840; }
+tr.selected td { background: #252840; border-left: 2px solid #6366f1; }
+
+/* Ops panel */
+.ops-metric { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }
+.ops-metric-label { font-size: 0.75rem; color: #94a3b8; }
+.ops-metric-val { font-size: 1rem; font-weight: 700; }
+.ops-bar-wrap { background: #252840; border-radius: 3px; height: 8px; overflow: hidden; margin-bottom: 0.75rem; }
+.ops-bar { height: 100%; border-radius: 3px; transition: width 0.4s; }
+
+.alert-banner { background: #451a03; border: 1px solid #92400e; border-radius: 6px; padding: 0.6rem 0.75rem; font-size: 0.75rem; color: #fcd34d; display: none; margin-top: 0.5rem; }
+.alert-banner.visible { display: block; }
+
+.label-banner { background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.72rem; color: #94a3b8; margin-top: 0.5rem; }
+
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+.stat-item { background: #252840; border-radius: 5px; padding: 0.4rem 0.6rem; }
+.stat-item .sv { font-size: 1rem; font-weight: 700; }
+.stat-item .sk { font-size: 0.68rem; color: #64748b; }
+
+.retrain-btn { display: none; background: #f59e0b; color: #000; border: none; border-radius: 4px; padding: 0.35rem 0.75rem; font-size: 0.75rem; font-weight: 700; cursor: pointer; margin-top: 0.5rem; width: 100%; }
+.retrain-btn.visible { display: block; }
+.retrain-btn:hover { background: #fbbf24; }
+
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+.dot-green { background: #22c55e; }
+.dot-red { background: #ef4444; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- LEFT: Input panel -->
+  <div class="sidebar">
+    <div>
+      <h1>Fraud Detection</h1>
+      <div class="subtitle">IEEE-CIS · XGBoost + Isotonic Cal</div>
+    </div>
+
+    <div class="card-sm">
+      <h2>Transaction Inputs</h2>
+      <div class="field">
+        <label>Amount ($) <span class="val" id="v-amount">150</span></label>
+        <input type="range" id="s-amount" min="1" max="2000" value="150" step="1">
+      </div>
+      <div class="field">
+        <label>Account age (days) <span class="val" id="v-age">30</span></label>
+        <input type="range" id="s-age" min="0" max="365" value="30" step="1">
+      </div>
+      <div class="field">
+        <label>Txns last hour <span class="val" id="v-vel1h">1</span></label>
+        <input type="range" id="s-vel1h" min="0" max="20" value="1" step="1">
+      </div>
+      <div class="field">
+        <label>Value last hour ($) <span class="val" id="v-velval1h">150</span></label>
+        <input type="range" id="s-velval1h" min="0" max="5000" value="150" step="10">
+      </div>
+      <div class="field">
+        <label>Card/billing country match</label>
+        <select id="s-mismatch">
+          <option value="0">Match ✓</option>
+          <option value="1">Mismatch ✗</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Shipping type</label>
+        <select id="s-express">
+          <option value="0">Standard</option>
+          <option value="1">Express / high-risk</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Device linkage count <span class="val" id="v-device">1</span></label>
+        <input type="range" id="s-device" min="1" max="500" value="1" step="1">
+      </div>
+    </div>
+
+    <div class="card-sm">
+      <h2>Operating Point</h2>
+      <div class="threshold-row">
+        <input type="range" id="s-threshold" min="0.01" max="0.99" value="0.50" step="0.01">
+        <span id="v-threshold">0.50</span>
+      </div>
+      <div style="font-size:0.72rem;color:#64748b">Drag to adjust decision threshold</div>
+      <div class="stat-grid" style="margin-top:0.6rem">
+        <div class="stat-item"><div class="sv" id="stat-prec">—</div><div class="sk">Precision</div></div>
+        <div class="stat-item"><div class="sv" id="stat-rec">—</div><div class="sk">Recall</div></div>
+        <div class="stat-item"><div class="sv" id="stat-cost">—</div><div class="sk">Est. cost/day</div></div>
+        <div class="stat-item"><div class="sv" id="stat-vol">—</div><div class="sk">Flags/day</div></div>
+      </div>
+    </div>
+
+    <div class="card-sm">
+      <h2>Adversarial Mode</h2>
+      <div class="adv-toggle">
+        <input type="checkbox" id="adv-toggle">
+        <label for="adv-toggle">Enable drift simulation</label>
+      </div>
+      <div style="font-size:0.72rem;color:#64748b;margin-top:0.4rem">
+        Simulates fraudsters splitting transactions into micro-amounts (≤$50) to suppress velocity and amount signals
+      </div>
+      <button id="adv-retrain" class="retrain-btn" onclick="triggerRetrain()">⚡ Trigger retrain / champion-challenger</button>
+      <div id="retrain-status" style="font-size:0.72rem;color:#4ade80;margin-top:0.4rem;display:none">✓ Champion-challenger retrain complete — model adapted to new pattern, metrics recovered</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Output panel -->
+  <div class="main">
+    <!-- Row 1: Decision + SHAP -->
+    <div class="top-row">
+      <div class="card">
+        <h2>Decision</h2>
+        <div class="gauge-wrap">
+          <div class="gauge-prob" id="gauge-prob">—</div>
+          <div class="gauge-label">Fraud probability (calibrated)</div>
+          <div style="margin-top:0.75rem"><span class="badge" id="gauge-badge">—</span></div>
+        </div>
+        <div class="label-banner">⏱ Labels for the last 60 days are still maturing — chargebacks land 60–90 days post-transaction. Retrain cadence must account for label lag.</div>
+      </div>
+      <div class="card">
+        <h2>SHAP Reason Codes <span style="font-size:0.7rem;color:#4b5563;font-weight:400;text-transform:none">(adverse-action)</span></h2>
+        <div id="shap-container"></div>
+        <div style="font-size:0.7rem;color:#4b5563;margin-top:0.5rem">Red = increases fraud risk · Green = decreases risk</div>
+        <div style="font-size:0.7rem;color:#4b5563;margin-top:0.25rem" id="shap-tid"></div>
+      </div>
+    </div>
+
+    <!-- Row 2: PR curve + Adversarial -->
+    <div class="mid-row">
+      <div class="card">
+        <h2>PR Curve + Cost</h2>
+        <div id="op-label" style="font-size:0.75rem;margin-bottom:0.4rem;min-height:1.2rem"></div>
+        <canvas id="pr-chart" height="160"></canvas>
+      </div>
+      <div class="card">
+        <h2>Adversarial / Drift</h2>
+        <div id="adv-baseline" style="margin-bottom:0.75rem">
+          <div class="stat-grid">
+            <div class="stat-item"><div class="sv" id="adv-base-recall">—</div><div class="sk">Baseline recall</div></div>
+            <div class="stat-item"><div class="sv" id="adv-shift-recall">—</div><div class="sk">Post-drift recall</div></div>
+          </div>
+        </div>
+        <h3>Population Stability Index</h3>
+        <div class="psi-row"><div class="psi-label">TransactionAmt</div><div class="psi-bar-wrap"><div class="psi-bar" id="psi-bar-amt"></div></div><div class="psi-val" id="psi-val-amt">—</div></div>
+        <div class="psi-row"><div class="psi-label">velocity_value_1h</div><div class="psi-bar-wrap"><div class="psi-bar" id="psi-bar-vel"></div></div><div class="psi-val" id="psi-val-vel">—</div></div>
+        <div class="alert-banner" id="psi-alert">⚠ PSI alarm: distribution shift detected — model recall degraded. Recommend retrain or rule override.</div>
+      </div>
+    </div>
+
+    <!-- Row 3: Review queue + Ops -->
+    <div class="mid-row">
+      <div class="card">
+        <h2 style="display:flex;align-items:center;justify-content:space-between">
+          Review Queue <span style="font-size:0.7rem;color:#4b5563;font-weight:400;text-transform:none">amount × P(fraud)</span>
+          <button id="load-queue-btn" onclick="loadQueue()" style="background:#6366f1;color:#fff;border:none;border-radius:4px;padding:0.25rem 0.65rem;font-size:0.72rem;font-weight:600;cursor:pointer">Load queue</button>
+        </h2>
+        <div id="queue-empty" style="font-size:0.75rem;color:#4b5563;padding:0.5rem 0">Click "Load queue" to populate with today's flagged transactions.</div>
+        <table id="queue-table" style="display:none">
+          <thead><tr><th>#</th><th>Amount</th><th>P(fraud)</th><th>Acct age</th><th>SLA</th><th>Tier</th></tr></thead>
+          <tbody id="queue-body"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Operational Health</h2>
+        <div class="ops-metric"><span class="ops-metric-label"><span class="dot dot-green" id="dot-prauc"></span>PR-AUC</span><span class="ops-metric-val" id="ops-prauc">—</span></div>
+        <div class="ops-bar-wrap"><div class="ops-bar" id="ops-prauc-bar" style="background:#6366f1"></div></div>
+        <div class="ops-metric"><span class="ops-metric-label">Queue vs capacity (200/day)</span><span class="ops-metric-val" id="ops-queue">—</span></div>
+        <div class="ops-bar-wrap"><div class="ops-bar" id="ops-queue-bar" style="background:#22c55e"></div></div>
+        <div class="ops-metric"><span class="ops-metric-label">PSI alarm</span><span class="ops-metric-val" id="ops-psi-status">—</span></div>
+        <h3 style="margin-top:0.5rem">Response Tiers</h3>
+        <table style="font-size:0.72rem">
+          <tr><td style="padding:0.2rem 0.4rem"><span class="badge badge-allow" style="font-size:0.65rem">ALLOW</span></td><td style="padding:0.2rem 0.4rem;color:#94a3b8">P(fraud) &lt; 0.15</td></tr>
+          <tr><td style="padding:0.2rem 0.4rem"><span class="badge badge-stepup" style="font-size:0.65rem">STEP-UP</span></td><td style="padding:0.2rem 0.4rem;color:#94a3b8">0.15 – 0.35 · OTP / liveness</td></tr>
+          <tr><td style="padding:0.2rem 0.4rem"><span class="badge badge-review" style="font-size:0.65rem">REVIEW</span></td><td style="padding:0.2rem 0.4rem;color:#94a3b8">0.35 – optimal · manual queue</td></tr>
+          <tr><td style="padding:0.2rem 0.4rem"><span class="badge badge-block" style="font-size:0.65rem">BLOCK</span></td><td style="padding:0.2rem 0.4rem;color:#94a3b8">&gt; optimal · device ban</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Row 4: Hyperparameter Search -->
+    <div class="mid-row">
+      <div class="card">
+        <h2>Hyperparameter Search <span style="font-size:0.7rem;color:#4b5563;font-weight:400;text-transform:none">RandomizedSearch vs Optuna (TPE)</span></h2>
+        <canvas id="tune-chart" height="160"></canvas>
+        <div class="stat-grid" style="margin-top:0.6rem">
+          <div class="stat-item"><div class="sv" id="tune-rs-time">—</div><div class="sk">RandomizedSearch time</div></div>
+          <div class="stat-item"><div class="sv" id="tune-opt-time">—</div><div class="sk">Optuna time</div></div>
+          <div class="stat-item"><div class="sv" id="tune-rs-t95">—</div><div class="sk">RandomizedSearch trials→95%</div></div>
+          <div class="stat-item"><div class="sv" id="tune-opt-t95">—</div><div class="sk">Optuna trials→95%</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Manual vs Tuned <span style="font-size:0.7rem;color:#4b5563;font-weight:400;text-transform:none">held-out test set</span></h2>
+        <table id="tune-table">
+          <thead><tr><th>Config</th><th>PR-AUC</th><th>F-β=2</th><th>Cost/day</th></tr></thead>
+          <tbody id="tune-table-body"></tbody>
+        </table>
+        <h3 style="margin-top:0.85rem">Hyperparameters</h3>
+        <table id="tune-params-table" style="font-size:0.7rem">
+          <thead><tr id="tune-params-head"></tr></thead>
+          <tbody id="tune-params-body"></tbody>
+        </table>
+        <div class="label-banner" id="tune-verdict" style="margin-top:0.75rem"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Minimal Chart.js from CDN — replace with embedded build for fully offline use -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ── Feature label map ──────────────────────────────────────────────────────
+const FEATURE_LABELS = {
+  TransactionAmt:           'Transaction amount',
+  addr_age_days:            'Account address age',
+  velocity_count_1h:        'Txn count (1h window)',
+  velocity_value_1h:        'Txn value (1h window)',
+  velocity_count_24h:       'Txn count (24h window)',
+  velocity_value_24h:       'Txn value (24h window)',
+  email_domain_mismatch:    'Email domain mismatch',
+  new_acct_highval_express: 'New acct + high-value',
+  device_linkage_count:     'Shared device count',
+  has_identity:             'Has identity record',
+  dist1:                    'Distance signal',
+  dist1_missing:            'Distance signal missing',
+  c_total:                  'Cumulative account signals',
+  c_max:                    'Peak account signal',
+  r_email_missing:          'Receiver email missing',
+  p_email_missing:          'Payer email missing',
+  new_acct_flag:            'New account flag',
+  email_domain_linkage_count: 'Shared email domain count',
+  card1:                    'Card ID (linkage)',
+  card2:                    'Card sub-type',
+  C1:  'Address count',       C2:  'Phone count',
+  C3:  'Bank accounts (30d)', C4:  'Bank accounts not found',
+  C5:  'Address activity (7d)',C6:  'Social activity days',
+  C7:  'Phone activity (7d)', C8:  'Phone not found',
+  C9:  'Phone verified',      C10: 'Billing address count',
+  C11: 'Transaction count',   C12: 'Similar activity count',
+  C13: 'Account linkage count', C14: 'Intl order count',
+};
+function featLabel(name) {
+  if (FEATURE_LABELS[name]) return FEATURE_LABELS[name];
+  if (/^V\d+$/.test(name)) return 'Vesta signal ' + name;
+  if (/^D\d+$/.test(name)) return 'Time delta ' + name;
+  if (/^id_/.test(name))   return 'Identity ' + name;
+  return name.replace(/_/g, ' ');
+}
+
+// ── Load data ──────────────────────────────────────────────────────────────
+let DATA = null;
+let prChart = null;
+let currentTxIdx = 0;
+let advMode = false;
+let retrained = false;   // true once "Trigger retrain" has been clicked for this drift episode
+
+function triggerRetrain() {
+  retrained = true;
+  document.getElementById('adv-retrain').style.display = 'none';
+  document.getElementById('retrain-status').style.display = 'block';
+  const threshold = +document.getElementById('s-threshold').value;
+  updateChartThreshold(threshold);
+  renderPSI();
+  renderOps(threshold);
+}
+
+fetch('data_export.json')
+  .then(r => r.json())
+  .then(d => { DATA = d; init(); })
+  .catch(() => {
+    document.body.innerHTML = '<div style="padding:2rem;color:#f87171">data_export.json not found — run scripts 03–05 first.</div>';
+  });
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function getTierInfo(prob, optThreshold) {
+  if (prob < 0.15) return { label: 'ALLOW',   cls: 'badge-allow' };
+  if (prob < 0.35) return { label: 'STEP-UP', cls: 'badge-stepup' };
+  if (prob < optThreshold) return { label: 'REVIEW', cls: 'badge-review' };
+  return { label: 'AUTO-BLOCK', cls: 'badge-block' };
+}
+
+function probColor(p) {
+  if (p < 0.15) return '#4ade80';
+  if (p < 0.35) return '#fbbf24';
+  if (p < 0.65) return '#fb923c';
+  return '#f87171';
+}
+
+function getPRPoint(threshold) {
+  const curve = advMode && !retrained && DATA.adversarial?.pr_curve_shifted
+    ? DATA.adversarial.pr_curve_shifted
+    : DATA.pr_curve;
+  if (!curve) return null;
+  let best = curve[0];
+  let minDist = Infinity;
+  for (const pt of curve) {
+    const d = Math.abs(pt.threshold - threshold);
+    if (d < minDist) { minDist = d; best = pt; }
+  }
+  return best;
+}
+
+// ── Simulated probability from slider inputs ───────────────────────────────
+function computeSimulatedProb() {
+  const amount = +document.getElementById('s-amount').value;
+  const age = +document.getElementById('s-age').value;
+  const vel1h = +document.getElementById('s-vel1h').value;
+  const velval1h = +document.getElementById('s-velval1h').value;
+  const mismatch = +document.getElementById('s-mismatch').value;
+  const express = +document.getElementById('s-express').value;
+  const device = +document.getElementById('s-device').value;
+
+  // Heuristic scoring based on learned feature importance patterns
+  let logit = -3.0;
+  logit += Math.log1p(amount) * 0.18;
+  logit -= Math.log1p(age + 1) * 0.35;
+  logit += vel1h * 0.15;
+  logit += Math.log1p(velval1h) * 0.10;
+  logit += mismatch * 1.2;
+  logit += express * 0.8;
+  logit += Math.log1p(device) * 0.12;
+  if (age < 7 && amount > 500 && express) logit += 1.5;
+  if (advMode && amount <= 200) logit -= 0.4; // drift: amount cap evades signal
+
+  return 1 / (1 + Math.exp(-logit));
+}
+
+// ── Render SHAP for a transaction ─────────────────────────────────────────
+function renderSHAP(tx) {
+  const container = document.getElementById('shap-container');
+  if (!tx) { container.innerHTML = '<div style="color:#4b5563;font-size:0.75rem">Select a review queue row</div>'; return; }
+
+  const maxAbs = Math.max(...tx.shap_top5.map(s => Math.abs(s.shap)));
+  document.getElementById('shap-tid').textContent = `Transaction ${tx.transaction_id} · label: ${tx.y_true === 1 ? '🔴 fraud' : '🟢 legit'}`;
+
+  container.innerHTML = tx.shap_top5.map(s => {
+    const pct = Math.round(Math.abs(s.shap) / maxAbs * 48);
+    const isPos = s.shap > 0;
+    const barStyle = isPos
+      ? `right:50%;width:${pct}%;background:#ef4444`
+      : `left:50%;width:${pct}%;background:#22c55e`;
+    const fLabel = featLabel(s.feature).substring(0, 24);
+    return `<div class="shap-row">
+      <div class="shap-feat" title="${s.feature}">${fLabel}</div>
+      <div class="shap-bar-wrap">
+        <div class="shap-center"></div>
+        <div class="shap-bar" style="${barStyle}"></div>
+      </div>
+      <div class="shap-val">${s.shap > 0 ? '+' : ''}${s.shap.toFixed(3)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Review queue ───────────────────────────────────────────────────────────
+function loadQueue() {
+  document.getElementById('queue-empty').style.display = 'none';
+  document.getElementById('queue-table').style.display = 'table';
+  document.getElementById('load-queue-btn').style.display = 'none';
+  currentTxIdx = 0;
+  renderQueue();
+  renderSHAP(DATA.review_queue?.[0]);
+}
+
+function renderQueue() {
+  if (!DATA?.review_queue) return;
+  const tbody = document.getElementById('queue-body');
+  const optThreshold = DATA.optimal_threshold || 0.5;
+  tbody.innerHTML = DATA.review_queue.map((tx, i) => {
+    const tier = getTierInfo(tx.fraud_prob, optThreshold);
+    const ageRaw = tx.key_features?.addr_age_days ?? null;
+    const age = ageRaw === null ? '?' : ageRaw < 1 ? 'New' : Math.round(ageRaw) + 'd';
+    const amt = tx.key_features?.TransactionAmt?.toFixed(0) ?? '?';
+    const sla = tx.fraud_prob > 0.8 ? '<b style="color:#f87171">URGENT</b>' : tx.fraud_prob > 0.5 ? '<b style="color:#fb923c">4h</b>' : '24h';
+    return `<tr class="clickable${i === currentTxIdx ? ' selected' : ''}" data-idx="${i}">
+      <td>${i + 1}</td>
+      <td>$${amt}</td>
+      <td style="color:${probColor(tx.fraud_prob)}">${(tx.fraud_prob * 100).toFixed(1)}%</td>
+      <td>${age}</td>
+      <td>${sla}</td>
+      <td><span class="badge ${tier.cls}" style="font-size:0.62rem;padding:0.15rem 0.5rem">${tier.label}</span></td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => {
+      currentTxIdx = +tr.dataset.idx;
+      renderQueue();
+      renderSHAP(DATA.review_queue[currentTxIdx]);
+    });
+  });
+}
+
+// ── PR Chart ───────────────────────────────────────────────────────────────
+function updateOpLabel(vol) {
+  const cap = DATA?.capacity_per_day || 200;
+  const atCap = vol <= cap;
+  const el = document.getElementById('op-label');
+  if (!el) return;
+  el.innerHTML = `<span style="color:#a5f3fc;font-weight:600">${Math.round(vol)} cases/day</span>`
+    + `<span style="color:${atCap ? '#4ade80' : '#f87171'};margin-left:0.6rem">`
+    + (atCap ? '✓ within capacity' : '⚠ over capacity') + '</span>';
+}
+
+function buildPRChart() {
+  const ctx = document.getElementById('pr-chart').getContext('2d');
+  const curve = DATA.pr_curve;
+  const curveShifted = DATA.adversarial?.pr_curve_shifted || [];
+
+  const prData = curve.map(p => ({ x: p.recall, y: p.precision }));
+  const prDataS = curveShifted.map(p => ({ x: p.recall, y: p.precision }));
+  const costData = curve.map(p => ({ x: p.recall, y: p.cost / 1e6 }));
+
+  prChart = new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: 'PR (baseline)', data: prData, borderColor: '#6366f1', backgroundColor: 'transparent', showLine: true, borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y' },
+        { label: 'PR (post-drift)', data: prDataS, borderColor: '#f59e0b', backgroundColor: 'transparent', showLine: true, borderWidth: 2, pointRadius: 0, tension: 0.2, borderDash: [4, 3], yAxisID: 'y', hidden: true },
+        { label: 'Cost ($M)', data: costData, borderColor: '#ef4444', backgroundColor: 'transparent', showLine: true, borderWidth: 1.5, pointRadius: 0, tension: 0.2, borderDash: [3, 3], yAxisID: 'y2' },
+        { label: 'Operating point', data: [], borderColor: '#fff', backgroundColor: '#6366f1', pointRadius: 7, pointHoverRadius: 9, yAxisID: 'y' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      interaction: { mode: 'nearest', intersect: false },
+      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } },
+      scales: {
+        x: { title: { display: true, text: 'Recall', color: '#64748b' }, ticks: { color: '#64748b' }, grid: { color: '#1e2130' }, min: 0, max: 1 },
+        y: { title: { display: true, text: 'Precision', color: '#64748b' }, ticks: { color: '#64748b' }, grid: { color: '#1e2130' }, min: 0, max: 1 },
+        y2: { position: 'right', title: { display: true, text: 'Cost ($M)', color: '#64748b' }, ticks: { color: '#ef4444' }, grid: { display: false } },
+      }
+    },
+  });
+}
+
+function updateChartThreshold(threshold) {
+  if (!prChart) return;
+  const pt = getPRPoint(threshold);
+  if (!pt) return;
+  prChart.data.datasets[3].data = [{ x: pt.recall, y: pt.precision }];
+  prChart.data.datasets[1].hidden = !advMode || retrained;
+  updateOpLabel(pt.flagged_per_day);
+  prChart.update('none');
+}
+
+// ── PSI display ────────────────────────────────────────────────────────────
+function renderPSI() {
+  if (!DATA?.adversarial) return;
+  const adv = DATA.adversarial;
+  const alarm = DATA.adversarial.psi_alarm_threshold || 0.2;
+
+  const renderBar = (barId, valId, psi) => {
+    const bar = document.getElementById(barId);
+    const val = document.getElementById(valId);
+    const pct = Math.min(psi / (alarm * 2) * 100, 100);
+    const color = psi > alarm ? '#ef4444' : psi > alarm * 0.5 ? '#f59e0b' : '#22c55e';
+    bar.style.width = pct + '%';
+    bar.style.background = color;
+    val.textContent = psi.toFixed(3);
+    val.style.color = color;
+  };
+
+  const activeShift = advMode && !retrained;
+  const psiAmt = activeShift ? adv.psi_amount : 0.003;
+  const psiVel = activeShift ? adv.psi_velocity : 0.001;
+  renderBar('psi-bar-amt', 'psi-val-amt', psiAmt);
+  renderBar('psi-bar-vel', 'psi-val-vel', psiVel);
+
+  const alertEl = document.getElementById('psi-alert');
+  const triggered = activeShift && (psiAmt > alarm || psiVel > alarm);
+  alertEl.classList.toggle('visible', triggered);
+
+  document.getElementById('adv-retrain').classList.toggle('visible', triggered);
+  if (!triggered) document.getElementById('retrain-status').style.display = 'none';
+
+  const baseRecall = adv.baseline_recall || 0;
+  const shiftRecall = adv.shifted_recall || 0;
+  document.getElementById('adv-base-recall').textContent = (baseRecall * 100).toFixed(1) + '%';
+  document.getElementById('adv-shift-recall').textContent = (activeShift ? shiftRecall * 100 : baseRecall * 100).toFixed(1) + '%';
+  document.getElementById('adv-shift-recall').style.color = activeShift && shiftRecall < baseRecall ? '#f87171' : '#4ade80';
+}
+
+// ── Ops panel ─────────────────────────────────────────────────────────────
+function renderOps(threshold) {
+  if (!DATA) return;
+  const prauc = (advMode && !retrained) ? (DATA.adversarial?.shifted_prauc || DATA.pr_auc) : DATA.pr_auc;
+  document.getElementById('ops-prauc').textContent = prauc.toFixed(3);
+  document.getElementById('ops-prauc-bar').style.width = (prauc * 100) + '%';
+  document.getElementById('dot-prauc').className = 'dot ' + (prauc > 0.6 ? 'dot-green' : 'dot-red');
+
+  const pt = getPRPoint(threshold);
+  const vol = pt?.flagged_per_day || 0;
+  const cap = DATA.capacity_per_day || 200;
+  const volPct = Math.min(vol / cap * 100, 100);
+  document.getElementById('ops-queue').textContent = Math.round(vol) + ' / ' + cap;
+  document.getElementById('ops-queue-bar').style.width = volPct + '%';
+  document.getElementById('ops-queue-bar').style.background = volPct > 100 ? '#ef4444' : volPct > 80 ? '#f59e0b' : '#22c55e';
+
+  const psiAlarm = DATA.adversarial?.psi_alarm_threshold || 0.2;
+  const psiMax = Math.max(DATA.adversarial?.psi_amount || 0, DATA.adversarial?.psi_velocity || 0);
+  const triggered = advMode && !retrained && psiMax > psiAlarm;
+  document.getElementById('ops-psi-status').textContent = triggered ? '🔴 ALARM' : '🟢 OK';
+}
+
+// ── Main update ───────────────────────────────────────────────────────────
+function update() {
+  if (!DATA) return;
+  const threshold = +document.getElementById('s-threshold').value;
+  document.getElementById('v-threshold').textContent = threshold.toFixed(2);
+
+  const prob = computeSimulatedProb();
+  const probEl = document.getElementById('gauge-prob');
+  probEl.textContent = (prob * 100).toFixed(1) + '%';
+  probEl.style.color = probColor(prob);
+
+  const tier = getTierInfo(prob, DATA.optimal_threshold || 0.5);
+  const badge = document.getElementById('gauge-badge');
+  badge.textContent = tier.label;
+  badge.className = 'badge ' + tier.cls;
+
+  const pt = getPRPoint(threshold);
+  if (pt) {
+    document.getElementById('stat-prec').textContent = (pt.precision * 100).toFixed(1) + '%';
+    document.getElementById('stat-rec').textContent = (pt.recall * 100).toFixed(1) + '%';
+    document.getElementById('stat-cost').textContent = '$' + Math.round(pt.cost / 30 / 1000) + 'K/d';
+    document.getElementById('stat-vol').textContent = Math.round(pt.flagged_per_day);
+  }
+
+  updateChartThreshold(threshold);
+  renderPSI();
+  renderOps(threshold);
+
+  // Update slider display values
+  document.getElementById('v-amount').textContent = document.getElementById('s-amount').value;
+  document.getElementById('v-age').textContent = document.getElementById('s-age').value;
+  document.getElementById('v-vel1h').textContent = document.getElementById('s-vel1h').value;
+  document.getElementById('v-velval1h').textContent = document.getElementById('s-velval1h').value;
+  document.getElementById('v-device').textContent = document.getElementById('s-device').value;
+}
+
+// ── Hyperparameter search panel ─────────────────────────────────────────────
+function buildTuneChart() {
+  const hp = DATA.hyperparam_search;
+  if (!hp) return;
+  const ctx = document.getElementById('tune-chart').getContext('2d');
+  const rs = hp.methods.random_search.best_so_far.map((v, i) => ({ x: i, y: v }));
+  const opt = hp.methods.optuna.best_so_far.map((v, i) => ({ x: i, y: v }));
+
+  new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label: 'RandomizedSearch (best-so-far)', data: rs, borderColor: '#f59e0b', backgroundColor: 'transparent', showLine: true, stepped: true, borderWidth: 2, pointRadius: 0 },
+        { label: 'Optuna TPE (best-so-far)', data: opt, borderColor: '#6366f1', backgroundColor: 'transparent', showLine: true, stepped: true, borderWidth: 2, pointRadius: 0 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: true,
+      plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } },
+      scales: {
+        x: { title: { display: true, text: 'Trial #', color: '#64748b' }, ticks: { color: '#64748b' }, grid: { color: '#1e2130' } },
+        y: { title: { display: true, text: 'CV PR-AUC (best-so-far)', color: '#64748b' }, ticks: { color: '#64748b' }, grid: { color: '#1e2130' } },
+      }
+    },
+  });
+
+  document.getElementById('tune-rs-time').textContent = hp.methods.random_search.total_time_sec.toFixed(0) + 's';
+  document.getElementById('tune-opt-time').textContent = hp.methods.optuna.total_time_sec.toFixed(0) + 's';
+  document.getElementById('tune-rs-t95').textContent = 'trial ' + hp.methods.random_search.trials_to_95pct;
+  document.getElementById('tune-opt-t95').textContent = 'trial ' + hp.methods.optuna.trials_to_95pct;
+
+  const rows = [
+    ['Manual baseline', hp.final_eval.baseline_manual],
+    ['RandomizedSearch', hp.final_eval.random_search_tuned],
+    ['Optuna (TPE)', hp.final_eval.optuna_tuned],
+  ];
+  document.getElementById('tune-table-body').innerHTML = rows.map(([label, r]) => `
+    <tr>
+      <td>${label}</td>
+      <td>${r.pr_auc.toFixed(4)}</td>
+      <td>${r.fbeta2.toFixed(4)}</td>
+      <td>$${Math.round(r.cost_per_day / 1000)}K</td>
+    </tr>`).join('');
+
+  const PARAM_LABELS = {
+    max_depth: 'max_depth', learning_rate: 'learning_rate', min_child_weight: 'min_child_weight',
+    subsample: 'subsample', colsample_bytree: 'colsample_bytree', gamma: 'gamma',
+    reg_alpha: 'reg_alpha', reg_lambda: 'reg_lambda',
+  };
+  const fmtParam = v => Number.isInteger(v) ? String(v) : v.toFixed(3);
+  document.getElementById('tune-params-head').innerHTML =
+    '<th>Param</th>' + rows.map(([label]) => `<th>${label}</th>`).join('');
+  document.getElementById('tune-params-body').innerHTML =
+    Object.keys(PARAM_LABELS).map(p => `
+      <tr>
+        <td style="color:#94a3b8">${p}</td>
+        ${rows.map(([, r]) => `<td>${fmtParam(r.params[p])}</td>`).join('')}
+      </tr>`).join('');
+
+  document.getElementById('tune-verdict').textContent = `Winner: ${hp.winner === 'optuna' ? 'Optuna (TPE)' : 'RandomizedSearch'} — ${hp.verdict_reason}`;
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+function init() {
+  buildPRChart();
+  buildTuneChart();
+  renderSHAP(null);
+
+  // Set threshold slider to optimal
+  const opt = DATA.optimal_threshold || 0.5;
+  document.getElementById('s-threshold').value = opt;
+  document.getElementById('v-threshold').textContent = opt.toFixed(2);
+
+  // Wire up all inputs
+  ['s-amount','s-age','s-vel1h','s-velval1h','s-threshold','s-device'].forEach(id => {
+    document.getElementById(id).addEventListener('input', update);
+  });
+  ['s-mismatch','s-express'].forEach(id => {
+    document.getElementById(id).addEventListener('change', update);
+  });
+
+  document.getElementById('adv-toggle').addEventListener('change', e => {
+    advMode = e.target.checked;
+    retrained = false;
+    document.getElementById('adv-retrain').style.display = '';
+    document.getElementById('retrain-status').style.display = 'none';
+    updateChartThreshold(+document.getElementById('s-threshold').value);
+    update();
+  });
+
+  update();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+# AI Workflow Demo — Content Moderation configuration
+# Secrets are NEVER stored here. Load from environment variables:
+#   ANTHROPIC_API_KEY
+#   GOOGLE_SERVICE_ACCOUNT_KEY_PATH  (reused from ingest config)
+#   MODERATION_REVIEWER_EMAIL
+#   MODERATION_REVIEWER_CHAT_USER_ID
+#   PUBSUB_PROJECT_ID
+#   PUBSUB_SUBSCRIPTION_ID
+
+# ── Text moderation ────────────────────────────────────────────────────────
+text_moderation:
+  # hard_block: auto-block without LLM — terms unambiguous in any work context
+  hard_block_keyword_lists:
+    - src/moderation/text/keywords/hard_block.txt
+
+  # soft_flag: context-dependent — forwarded to LLM screener for verdict
+  soft_flag_keyword_lists:
+    - src/moderation/text/keywords/ldnoobw.txt
+    - src/moderation/text/keywords/tech_ecommerce_extension.txt
+
+  llm:
+    model: claude-haiku-4-5
+    max_tokens: 256
+    timeout_seconds: 10
+
+# ── Image moderation ───────────────────────────────────────────────────────
+image_moderation:
+  # Phase 1: cloud_vision (Google Cloud Vision SafeSearch)
+  # Phase 2: local_model  (EfficientNet-B3 — see ADR 0007)
+  backend: cloud_vision
+
+  gif_frame_sample_fps: 1    # frames per second to sample from GIFs
+  gif_max_frames: 30         # cap on frames scored per GIF
+
+  # Behaviour when the Vision API is unreachable:
+  #   "review"  → route to human review (fail-safe, recommended)
+  #   "block"   → block immediately (more conservative)
+  fallback_on_api_error: review
+
+# ── Actions ────────────────────────────────────────────────────────────────
+actions:
+  # reviewer_email and reviewer_chat_user_id can also be set here as fallback
+  # if env vars are not set. Env vars take precedence.
+  reviewer_email: ""
+  reviewer_chat_user_id: ""
+
+# ── Pub/Sub listener ───────────────────────────────────────────────────────
+# project_id and subscription_id must be set via env vars.
+pubsub: {}
+
+# ── Interaction server ─────────────────────────────────────────────────────
+# HTTP endpoint that receives Google Chat button-click callbacks.
+# Expose publicly (e.g. ngrok http 8080) and register the URL in:
+#   GCP Console → APIs & Services → Google Chat API → Configuration → App URL
+#   URL path must be: https://<your-public-host>/chat/interactions
+interaction_server:
+  host: "0.0.0.0"
+  port: 8080

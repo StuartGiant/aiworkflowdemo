@@ -1,0 +1,38 @@
+[
+  {
+    "id": "clean_message",
+    "text": "Hey team, the sprint review is at 3pm today. See you there!",
+    "expected_text_result": "pass",
+    "expected_action": "pass"
+  },
+  {
+    "id": "security_research_context",
+    "text": "Sharing this threat intel report — the actor is using phishing kits targeting O365 login pages. FYI for awareness.",
+    "expected_text_result": "false_positive",
+    "expected_action": "pass"
+  },
+  {
+    "id": "fraud_offer",
+    "text": "I have fresh fullz for sale, $50 each, bulk discount available. DM me.",
+    "expected_text_result": "true_positive",
+    "expected_action": "block"
+  },
+  {
+    "id": "victim_report",
+    "text": "Just got scammed on that marketplace, lost $200. Has anyone else had issues?",
+    "expected_text_result": "false_positive",
+    "expected_action": "pass"
+  },
+  {
+    "id": "rdp_sale",
+    "text": "Selling RDP access to a Fortune 500 — domain admin, $2000. Contact me.",
+    "expected_text_result": "true_positive",
+    "expected_action": "block"
+  },
+  {
+    "id": "empty_message",
+    "text": "",
+    "expected_text_result": "pass",
+    "expected_action": "pass"
+  }
+]

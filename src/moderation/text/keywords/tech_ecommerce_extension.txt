@@ -1,0 +1,160 @@
+# Tech industry & e-commerce extension keyword list
+# Covers fraud, IP theft, account takeover, counterfeit goods, and phishing
+# terms specific to technology and online retail contexts.
+#
+# Format: one term per line; lines starting with # are comments.
+# Case-insensitive matching is applied at runtime.
+#
+# Sources / rationale:
+#   - Common payment card fraud terminology (carding, dumps, cvv shops)
+#   - Counterfeit goods / grey-market terms used on e-comm platforms
+#   - Phishing lure language targeting tech platform users
+#   - Credential theft / account takeover terminology
+#   - IP / trade-secret exfiltration language
+#   - Insider threat indicators (selling access, data for sale)
+
+# --- Payment card fraud / carding ---
+fullz
+fullz for sale
+cc dumps
+cvv shop
+cvv2 shop
+card dump
+dumps with pin
+bins for sale
+carding method
+carder
+cashout method
+bank logs
+bank login for sale
+paypal logs
+paypal account for sale
+stolen card
+fresh cvv
+valid cc
+cc shop
+skimmer
+skimming device
+
+# --- Account takeover / credential theft ---
+account takeover
+account for sale
+cracked account
+cracked accounts
+combo list
+combolist
+credential stuffing
+stealer logs
+stealer log
+log for sale
+logs for sale
+infostealer
+account checker
+checker tool
+brute force tool
+brute forcer
+config file shop
+sentry mba
+openbullet config
+account hacked
+hacked account
+
+# --- Phishing / social engineering ---
+phishing kit
+phishing page
+phish kit
+fake login page
+credential harvester
+evilginx
+modlishka
+reverse proxy phish
+spear phish
+spear phishing
+whaling attack
+vishing script
+smishing template
+sim swap
+sim swapping
+simswap
+
+# --- Counterfeit / grey-market goods ---
+replica watches
+fake goods
+counterfeit
+knockoff brand
+bootleg software
+pirated software
+cracked software
+warez
+nulled
+serial key generator
+keygen
+license key crack
+activation bypass
+oem leaked key
+
+# --- Intellectual property / trade secret ---
+source code for sale
+proprietary code leak
+confidential source
+trade secret
+NDA breach
+internal roadmap leak
+unreleased product leak
+selling company data
+customer data for sale
+employee data dump
+internal document leak
+
+# --- Insider threat / access selling ---
+selling vpn access
+selling rdp access
+rdp for sale
+remote access for sale
+corporate access
+insider access
+admin credentials for sale
+domain admin for sale
+privileged account for sale
+backdoor access
+persistent access for sale
+c2 access
+command and control access
+selling shell access
+webshell for sale
+
+# --- Malware / tools ---
+ransomware
+ransomware kit
+crypter
+fud crypter
+fully undetectable
+rat tool
+remote access trojan
+keylogger for sale
+spyware
+stalkerware
+exploit kit
+exploit for sale
+zero day for sale
+0day
+ddos service
+ddos for hire
+stresser
+booter
+botnet for hire
+botnet rental
+
+# --- Data exfiltration / brokering ---
+data breach for sale
+data leak for sale
+database dump
+db dump for sale
+customer pii for sale
+customer list for sale
+email list for sale
+leads for sale
+scraped data
+doxxing
+dox file
+personal info dump
